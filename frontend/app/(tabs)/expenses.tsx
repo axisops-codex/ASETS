@@ -1,13 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { View, SectionList, Pressable, ActivityIndicator, Platform } from "react-native";
+import { View, SectionList, Pressable, ActivityIndicator, Platform, Linking } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import BottomSheet from "@gorhom/bottom-sheet";
 import * as Haptics from "expo-haptics";
+import * as ImagePicker from "expo-image-picker";
+import { Image } from "expo-image";
 import { useTheme } from "@/src/theme/ThemeProvider";
-import { api } from "@/src/api/client";
+import { api, receiptUrl } from "@/src/api/client";
 import { useToast } from "@/src/components/Toast";
 import { AppSheet } from "@/src/components/AppSheet";
 import { AppText, Card, Field, PrimaryButton, EmptyState, IconButton } from "@/src/components/ui";
@@ -45,10 +47,23 @@ export default function Expenses() {
   const [date, setDate] = useState(new Date());
   const [showPicker, setShowPicker] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [receiptPath, setReceiptPath] = useState<string | null>(null);
+  const [receiptPreview, setReceiptPreview] = useState<string | null>(null);
+  const [permBlocked, setPermBlocked] = useState(false);
+  const [thumbs, setThumbs] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     try {
-      setExpenses(await api.expenses());
+      const list = await api.expenses();
+      setExpenses(list);
+      const withReceipts = list.filter((e: any) => e.receipt_path);
+      if (withReceipts.length) {
+        const entries = await Promise.all(
+          withReceipts.map(async (e: any) => [e.id, await receiptUrl(e.receipt_path)] as [string, string])
+        );
+        setThumbs(Object.fromEntries(entries));
+      }
     } catch (e: any) {
       toast.show(e.message || "Could not load", "error");
     } finally {
@@ -84,7 +99,57 @@ export default function Expenses() {
     setDescription("");
     setAmount("");
     setDate(new Date());
+    setReceiptPath(null);
+    setReceiptPreview(null);
+    setPermBlocked(false);
     createRef.current?.expand();
+  };
+
+  const pickAndScan = async (fromCamera: boolean) => {
+    setPermBlocked(false);
+    try {
+      const perm = fromCamera
+        ? await ImagePicker.getCameraPermissionsAsync()
+        : await ImagePicker.getMediaLibraryPermissionsAsync();
+      let granted = perm.granted;
+      if (!granted) {
+        if (perm.canAskAgain) {
+          const req = fromCamera
+            ? await ImagePicker.requestCameraPermissionsAsync()
+            : await ImagePicker.requestMediaLibraryPermissionsAsync();
+          granted = req.granted;
+          if (!granted && !req.canAskAgain) setPermBlocked(true);
+        } else {
+          setPermBlocked(true);
+        }
+      }
+      if (!granted) {
+        toast.show(fromCamera ? "Camera access needed to scan receipts" : "Photo access needed", "info");
+        return;
+      }
+      const result = fromCamera
+        ? await ImagePicker.launchCameraAsync({ mediaTypes: ["images"], quality: 0.5, base64: true })
+        : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], quality: 0.5, base64: true });
+      if (result.canceled || !result.assets?.[0]?.base64) return;
+      const asset = result.assets[0];
+      setReceiptPreview(asset.uri);
+      setScanning(true);
+      const res = await api.scanReceipt(asset.base64!);
+      if (res.category) setCategory(res.category);
+      if (res.amount) setAmount(String(res.amount));
+      setDescription(res.description || res.merchant || "");
+      if (res.date) {
+        const d = new Date(res.date);
+        if (!isNaN(d.getTime())) setDate(d);
+      }
+      setReceiptPath(res.receipt_path || null);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      toast.show("Receipt read — check the details", "success");
+    } catch (e: any) {
+      toast.show(e.message || "Could not read the receipt", "error");
+    } finally {
+      setScanning(false);
+    }
   };
 
   const save = async () => {
@@ -92,7 +157,7 @@ export default function Expenses() {
     if (!amt || amt <= 0) return toast.show("Enter an amount", "error");
     setSaving(true);
     try {
-      await api.createExpense({ category, description, amount: amt, date: toISODate(date) });
+      await api.createExpense({ category, description, amount: amt, date: toISODate(date), receipt_path: receiptPath });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       createRef.current?.close();
       toast.show("Expense added", "success");
@@ -153,9 +218,13 @@ export default function Expenses() {
           renderItem={({ item }) => (
             <Card style={{ paddingVertical: spacing.md }} testID={`expense-row-${item.id}`}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
-                <View style={{ width: 40, height: 40, borderRadius: 12, backgroundColor: colors.brandTertiary, alignItems: "center", justifyContent: "center" }}>
-                  <Ionicons name={catIcon(item.category) as any} size={20} color={colors.brand} />
-                </View>
+                {thumbs[item.id] ? (
+                  <Image source={{ uri: thumbs[item.id] }} style={{ width: 40, height: 40, borderRadius: 12 }} contentFit="cover" testID={`expense-thumb-${item.id}`} />
+                ) : (
+                  <View style={{ width: 40, height: 40, borderRadius: 12, backgroundColor: colors.brandTertiary, alignItems: "center", justifyContent: "center" }}>
+                    <Ionicons name={catIcon(item.category) as any} size={20} color={colors.brand} />
+                  </View>
+                )}
                 <View style={{ flex: 1 }}>
                   <AppText variant="body" style={{ fontWeight: "600" }}>{item.category}</AppText>
                   <AppText variant="caption">{item.description || prettyDate(item.date)}</AppText>
@@ -170,8 +239,38 @@ export default function Expenses() {
         />
       )}
 
-      <AppSheet ref={createRef} snapPoints={["80%"]}>
+      <AppSheet ref={createRef} snapPoints={["88%"]}>
         <AppText variant="title">Add expense</AppText>
+
+        {/* Scan receipt (AI) */}
+        <View style={{ backgroundColor: colors.brandTertiary, borderRadius: 16, padding: spacing.md, gap: spacing.sm }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+            <Ionicons name="sparkles" size={18} color={colors.brand} />
+            <AppText variant="body" color={colors.onBrandTertiary} style={{ fontWeight: "700", flex: 1 }}>Scan a receipt</AppText>
+            {scanning && <ActivityIndicator color={colors.brand} />}
+          </View>
+          <AppText variant="caption" color={colors.onBrandTertiary}>Snap or pick a photo and we'll fill in the details for you.</AppText>
+          {receiptPreview ? (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md, marginTop: 4 }}>
+              <Image source={{ uri: receiptPreview }} style={{ width: 54, height: 54, borderRadius: 10 }} contentFit="cover" />
+              <Pressable onPress={() => pickAndScan(true)} testID="expense-rescan"><AppText variant="body" color={colors.brand} style={{ fontWeight: "600" }}>Rescan</AppText></Pressable>
+            </View>
+          ) : (
+            <View style={{ flexDirection: "row", gap: spacing.sm, marginTop: 4 }}>
+              <View style={{ flex: 1 }}>
+                <PrimaryButton title="Take photo" icon="camera-outline" onPress={() => pickAndScan(true)} loading={scanning} testID="expense-scan-camera" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <PrimaryButton title="Gallery" icon="images-outline" variant="outline" onPress={() => pickAndScan(false)} testID="expense-scan-gallery" />
+              </View>
+            </View>
+          )}
+          {permBlocked && (
+            <Pressable onPress={() => Linking.openSettings()} testID="expense-open-settings" style={{ paddingTop: 4 }}>
+              <AppText variant="caption" color={colors.brand} style={{ fontWeight: "700" }}>Open Settings to allow access</AppText>
+            </Pressable>
+          )}
+        </View>
 
         <AppText variant="label">Category</AppText>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.sm }}>

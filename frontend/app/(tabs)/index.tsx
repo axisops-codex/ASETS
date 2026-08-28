@@ -3,11 +3,19 @@ import { View, ScrollView, RefreshControl, Pressable, ActivityIndicator } from "
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
 import { useTheme } from "@/src/theme/ThemeProvider";
 import { useAuth } from "@/src/context/AuthContext";
 import { api } from "@/src/api/client";
 import { AppText, Card, IconButton } from "@/src/components/ui";
-import { gbp, fiscalYearRange, prettyMonth } from "@/src/utils/format";
+import { gbp, fiscalYearRange, periodRange, prettyBucket, Period } from "@/src/utils/format";
+
+const PERIODS: { key: Period; label: string }[] = [
+  { key: "day", label: "Day" },
+  { key: "week", label: "Week" },
+  { key: "month", label: "Month" },
+  { key: "year", label: "Year" },
+];
 
 export default function Dashboard() {
   const { colors, spacing, radius } = useTheme();
@@ -16,28 +24,31 @@ export default function Dashboard() {
   const { user } = useAuth();
 
   const fy = fiscalYearRange();
-  const [summary, setSummary] = useState<any>(null);
+  const [period, setPeriod] = useState<Period>("year");
+  const [pSummary, setPSummary] = useState<any>(null);
+  const [fySummary, setFySummary] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const cards: string[] = user?.settings?.cards || ["take_home", "hmrc", "cashflow", "recent"];
+  const range = periodRange(period);
 
   const load = useCallback(async () => {
     try {
-      const s = await api.summary(fy.start, fy.end);
-      setSummary(s);
+      const [ps, fys] = await Promise.all([
+        api.summary(range.start, range.end, range.group),
+        api.summary(fy.start, fy.end, "month"),
+      ]);
+      setPSummary(ps);
+      setFySummary(fys);
     } catch {
-      // silent — show empty state
+      // silent
     } finally {
       setLoading(false);
     }
-  }, [fy.start, fy.end]);
+  }, [range.start, range.end, range.group, fy.start, fy.end]);
 
-  useFocusEffect(
-    useCallback(() => {
-      load();
-    }, [load])
-  );
+  useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -45,7 +56,12 @@ export default function Dashboard() {
     setRefreshing(false);
   };
 
-  const tax = summary?.tax;
+  const changePeriod = (p: Period) => {
+    Haptics.selectionAsync().catch(() => {});
+    setPeriod(p);
+  };
+
+  const tax = fySummary?.tax;
   const firstName = (user?.name || "").split(" ")[0] || "there";
 
   return (
@@ -74,26 +90,43 @@ export default function Dashboard() {
           showsVerticalScrollIndicator={false}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.brand} />}
         >
+          {/* Period segmented control */}
+          <View style={{ flexDirection: "row", backgroundColor: colors.surfaceTertiary, borderRadius: radius.md, padding: 4 }} testID="period-segment">
+            {PERIODS.map((p) => {
+              const active = period === p.key;
+              return (
+                <Pressable
+                  key={p.key}
+                  testID={`period-${p.key}`}
+                  onPress={() => changePeriod(p.key)}
+                  style={{ flex: 1, alignItems: "center", paddingVertical: spacing.sm, borderRadius: radius.sm + 2, backgroundColor: active ? colors.surfaceSecondary : "transparent", ...(active ? { shadowColor: "#000", shadowOpacity: 0.06, shadowRadius: 4, shadowOffset: { width: 0, height: 1 }, elevation: 1 } : {}) }}
+                >
+                  <AppText variant="caption" color={active ? colors.onSurface : colors.onSurfaceTertiary} style={{ fontWeight: "700" }}>{p.label}</AppText>
+                </Pressable>
+              );
+            })}
+          </View>
+
           {cards.includes("take_home") && (
             <Card style={{ backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary }} testID="card-take-home">
               <AppText variant="label" color={colors.onBrandPrimary} style={{ opacity: 0.9 }}>
-                Estimated take home · {fy.label}
+                Net · {range.label}
               </AppText>
-              <AppText variant="mono" color={colors.onBrandPrimary} style={{ marginVertical: spacing.xs }}>
-                {gbp(tax?.take_home ?? 0, 0)}
+              <AppText variant="mono" color={colors.onBrandPrimary} style={{ marginVertical: spacing.xs }} testID="hero-net">
+                {gbp(pSummary?.net ?? 0, 0)}
               </AppText>
-              <View style={{ flexDirection: "row", gap: spacing.lg, marginTop: spacing.sm }}>
+              <View style={{ flexDirection: "row", gap: spacing.xl, marginTop: spacing.sm }}>
                 <View>
                   <AppText variant="caption" color={colors.onBrandPrimary} style={{ opacity: 0.85 }}>Money in</AppText>
-                  <AppText variant="body" color={colors.onBrandPrimary} style={{ fontWeight: "700" }}>{gbp(summary?.sales ?? 0, 0)}</AppText>
+                  <AppText variant="body" color={colors.onBrandPrimary} style={{ fontWeight: "700" }}>{gbp(pSummary?.sales ?? 0, 0)}</AppText>
                 </View>
                 <View>
                   <AppText variant="caption" color={colors.onBrandPrimary} style={{ opacity: 0.85 }}>Money out</AppText>
-                  <AppText variant="body" color={colors.onBrandPrimary} style={{ fontWeight: "700" }}>{gbp(summary?.expenses ?? 0, 0)}</AppText>
+                  <AppText variant="body" color={colors.onBrandPrimary} style={{ fontWeight: "700" }}>{gbp(pSummary?.expenses ?? 0, 0)}</AppText>
                 </View>
                 <View>
-                  <AppText variant="caption" color={colors.onBrandPrimary} style={{ opacity: 0.85 }}>Set aside tax</AppText>
-                  <AppText variant="body" color={colors.onBrandPrimary} style={{ fontWeight: "700" }}>{gbp(tax?.total_due ?? 0, 0)}</AppText>
+                  <AppText variant="caption" color={colors.onBrandPrimary} style={{ opacity: 0.85 }}>Invoices</AppText>
+                  <AppText variant="body" color={colors.onBrandPrimary} style={{ fontWeight: "700" }}>{pSummary?.invoice_count ?? 0}</AppText>
                 </View>
               </View>
             </Card>
@@ -105,12 +138,27 @@ export default function Dashboard() {
             <QuickAction icon="receipt" label="Add expense" onPress={() => router.push("/(tabs)/expenses?new=1")} tone="secondary" testID="quick-add-expense" />
           </View>
 
+          {cards.includes("cashflow") && (
+            <Card testID="card-cashflow">
+              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: spacing.md }}>
+                <AppText variant="heading">Cash flow</AppText>
+                <AppText variant="caption">{range.label}</AppText>
+              </View>
+              {pSummary?.cashflow?.length ? (
+                <CashflowChart data={pSummary.cashflow} group={range.group} colors={colors} />
+              ) : (
+                <AppText variant="caption">No activity in this period yet.</AppText>
+              )}
+            </Card>
+          )}
+
           {cards.includes("hmrc") && (
             <Card onPress={() => router.push("/(tabs)/tax")} testID="card-hmrc">
               <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: spacing.sm }}>
                 <AppText variant="heading">HMRC estimate</AppText>
                 <Ionicons name="chevron-forward" size={18} color={colors.onSurfaceTertiary} />
               </View>
+              <AppText variant="caption" style={{ marginBottom: spacing.sm }}>This tax year · {fy.label}</AppText>
               <ReceiptLine label="Taxable profit" value={gbp(tax?.profit ?? 0)} colors={colors} />
               <ReceiptLine label="Income tax" value={gbp(tax?.income_tax ?? 0)} colors={colors} />
               <ReceiptLine label="National Insurance" value={gbp(tax?.national_insurance ?? 0)} colors={colors} />
@@ -119,17 +167,6 @@ export default function Dashboard() {
                 <AppText variant="label" color={colors.onSurface}>Tax to set aside</AppText>
                 <AppText variant="heading" color={colors.brandSecondary}>{gbp(tax?.total_due ?? 0)}</AppText>
               </View>
-            </Card>
-          )}
-
-          {cards.includes("cashflow") && (
-            <Card testID="card-cashflow">
-              <AppText variant="heading" style={{ marginBottom: spacing.md }}>Cash flow</AppText>
-              {summary?.cashflow?.length ? (
-                <CashflowChart data={summary.cashflow} colors={colors} radius={radius} />
-              ) : (
-                <AppText variant="caption">No activity yet this year.</AppText>
-              )}
             </Card>
           )}
 
@@ -142,12 +179,12 @@ export default function Dashboard() {
               <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
                 <View style={{ flex: 1 }}>
                   <AppText variant="caption">Awaiting payment</AppText>
-                  <AppText variant="heading" color={colors.warning}>{gbp(summary?.outstanding ?? 0)}</AppText>
+                  <AppText variant="heading" color={colors.warning}>{gbp(fySummary?.outstanding ?? 0)}</AppText>
                 </View>
                 <View style={{ width: 1, backgroundColor: colors.divider, marginHorizontal: spacing.md }} />
                 <View style={{ flex: 1 }}>
                   <AppText variant="caption">Paid this year</AppText>
-                  <AppText variant="heading" color={colors.success}>{gbp(summary?.paid ?? 0)}</AppText>
+                  <AppText variant="heading" color={colors.success}>{gbp(fySummary?.paid ?? 0)}</AppText>
                 </View>
               </View>
             </Card>
@@ -159,7 +196,7 @@ export default function Dashboard() {
 }
 
 function QuickAction({ icon, label, onPress, tone = "primary", testID }: any) {
-  const { colors, radius, spacing, fonts } = useTheme();
+  const { colors, radius, spacing } = useTheme();
   const bg = tone === "primary" ? colors.brandTertiary : colors.surfaceSecondary;
   const fg = tone === "primary" ? colors.onBrandTertiary : colors.brandSecondary;
   return (
@@ -167,17 +204,7 @@ function QuickAction({ icon, label, onPress, tone = "primary", testID }: any) {
       testID={testID}
       onPress={onPress}
       style={({ pressed }) => [
-        {
-          flex: 1,
-          backgroundColor: bg,
-          borderRadius: radius.md,
-          padding: spacing.md,
-          flexDirection: "row",
-          alignItems: "center",
-          gap: spacing.sm,
-          borderWidth: 1,
-          borderColor: colors.border,
-        },
+        { flex: 1, backgroundColor: bg, borderRadius: radius.md, padding: spacing.md, flexDirection: "row", alignItems: "center", gap: spacing.sm, borderWidth: 1, borderColor: colors.border },
         pressed && { opacity: 0.7 },
       ]}
     >
@@ -196,18 +223,20 @@ function ReceiptLine({ label, value, colors }: any) {
   );
 }
 
-function CashflowChart({ data, colors, radius }: any) {
-  const max = Math.max(...data.map((d: any) => Math.max(d.income, d.expenses)), 1);
+function CashflowChart({ data, group, colors }: any) {
+  const count = group === "day" ? 7 : 6;
+  const slice = data.slice(-count);
+  const max = Math.max(...slice.map((d: any) => Math.max(d.income, d.expenses)), 1);
   return (
     <View style={{ gap: 14 }}>
       <View style={{ flexDirection: "row", alignItems: "flex-end", justifyContent: "space-around", height: 120, gap: 8 }}>
-        {data.slice(-6).map((d: any, i: number) => (
+        {slice.map((d: any, i: number) => (
           <View key={i} style={{ flex: 1, alignItems: "center", gap: 4 }}>
             <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 3, height: 100 }}>
-              <View style={{ width: 10, height: Math.max(4, (d.income / max) * 100), backgroundColor: colors.success, borderRadius: 3 }} />
-              <View style={{ width: 10, height: Math.max(4, (d.expenses / max) * 100), backgroundColor: colors.brandSecondary, borderRadius: 3 }} />
+              <View style={{ width: 9, height: Math.max(4, (d.income / max) * 100), backgroundColor: colors.success, borderRadius: 3 }} />
+              <View style={{ width: 9, height: Math.max(4, (d.expenses / max) * 100), backgroundColor: colors.brandSecondary, borderRadius: 3 }} />
             </View>
-            <AppText variant="caption" style={{ fontSize: 10 }}>{prettyMonth(d.month)}</AppText>
+            <AppText variant="caption" style={{ fontSize: 10 }}>{prettyBucket(d.bucket || d.month, group)}</AppText>
           </View>
         ))}
       </View>

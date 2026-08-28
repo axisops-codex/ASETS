@@ -62,6 +62,13 @@ export const api = {
   updateExpense: (id: string, body: any) => request(`/expenses/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteExpense: (id: string) => request(`/expenses/${id}`, { method: "DELETE" }),
 
-  summary: (start: string, end: string) => request(`/summary?start=${start}&end=${end}`),
+  summary: (start: string, end: string, group: string = "month") =>
+    request(`/summary?start=${start}&end=${end}&group=${group}`),
   exportCsv: (start: string, end: string) => request(`/export/csv?start=${start}&end=${end}`),
+  scanReceipt: (image_base64: string) => request("/expenses/scan", { method: "POST", body: JSON.stringify({ image_base64 }) }),
 };
+
+export async function receiptUrl(path: string): Promise<string> {
+  const token = await loadToken();
+  return `${BASE}/files/${path}?token=${token || ""}`;
+}

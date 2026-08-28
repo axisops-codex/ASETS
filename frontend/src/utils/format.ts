@@ -58,3 +58,35 @@ export function fiscalYearByStartYear(startYear: number) {
     label: `${startYear}/${String(startYear + 1).slice(2)}`,
   };
 }
+
+export type Period = "day" | "week" | "month" | "year";
+
+export function periodRange(period: Period, ref = new Date()): { start: string; end: string; label: string; group: string } {
+  if (period === "day") {
+    const s = toISODate(ref);
+    return { start: s, end: s, label: "Today", group: "day" };
+  }
+  if (period === "week") {
+    const day = (ref.getDay() + 6) % 7; // Monday = 0
+    const monday = new Date(ref);
+    monday.setDate(ref.getDate() - day);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    return { start: toISODate(monday), end: toISODate(sunday), label: "This week", group: "day" };
+  }
+  if (period === "month") {
+    const first = new Date(ref.getFullYear(), ref.getMonth(), 1);
+    const last = new Date(ref.getFullYear(), ref.getMonth() + 1, 0);
+    return { start: toISODate(first), end: toISODate(last), label: MONTHS[ref.getMonth()] + " " + ref.getFullYear(), group: "day" };
+  }
+  const fy = fiscalYearRange(ref);
+  return { start: fy.start, end: fy.end, label: "Tax year " + fy.label, group: "month" };
+}
+
+export function prettyBucket(key: string, group: string): string {
+  if (group === "day") {
+    const [y, m, d] = key.split("-").map(Number);
+    return `${d} ${MONTHS[(m || 1) - 1]}`;
+  }
+  return prettyMonth(key);
+}

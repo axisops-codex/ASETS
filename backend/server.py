@@ -9,12 +9,17 @@ from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Literal
 import uuid
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, timedelta
 import jwt
 import bcrypt
 import re
 import ipaddress
 import httpx
+import base64
+import json
+import uuid as uuidlib
+import requests
+from fastapi.concurrency import run_in_threadpool
 from html import escape
 from html.parser import HTMLParser
 from urllib.parse import urlparse
@@ -25,6 +30,12 @@ load_dotenv(ROOT_DIR / '.env')
 EMAIL_BASE_URL = "https://integrations.emergentagent.com"
 EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY", "")
 EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "PsyBooks")
+
+EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
+STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
+STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
+APP_NAME = "psybooks"
+_storage_key = None
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
@@ -247,6 +258,103 @@ def build_invoice_email_html(inv: dict, biz: dict, client: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Object storage (Emergent managed) + receipt AI extraction
+# ---------------------------------------------------------------------------
+def init_storage():
+    global _storage_key
+    if _storage_key:
+        return _storage_key
+    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_LLM_KEY}, timeout=30)
+    resp.raise_for_status()
+    _storage_key = resp.json()["storage_key"]
+    return _storage_key
+
+
+def put_object(path: str, data: bytes, content_type: str) -> dict:
+    global _storage_key
+    key = init_storage()
+    resp = requests.put(
+        f"{STORAGE_URL}/objects/{path}",
+        headers={"X-Storage-Key": key, "Content-Type": content_type},
+        data=data,
+        timeout=120,
+    )
+    if resp.status_code == 503:
+        _storage_key = None
+        key = init_storage()
+        resp = requests.put(
+            f"{STORAGE_URL}/objects/{path}",
+            headers={"X-Storage-Key": key, "Content-Type": content_type},
+            data=data,
+            timeout=120,
+        )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_object(path: str) -> tuple:
+    key = init_storage()
+    resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
+    resp.raise_for_status()
+    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+
+
+EXPENSE_CATEGORIES = [
+    "Software", "Supervision", "Training / CPD", "Insurance", "Professional fees",
+    "Office / Rent", "Equipment", "Phone / Internet", "Travel", "Other",
+]
+
+
+async def extract_receipt(image_b64: str) -> dict:
+    from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
+    cats = ", ".join(EXPENSE_CATEGORIES)
+    system = (
+        "You read UK business expense receipts for a self-employed psychologist. "
+        "Return ONLY a compact JSON object, no prose, no code fences."
+    )
+    prompt = (
+        "Extract the expense from this receipt image. If a QR code is present, use any text it encodes. "
+        "Return JSON with keys exactly: amount (number, total paid), currency (e.g. GBP), "
+        "date (YYYY-MM-DD, best guess if unclear), merchant (string), description (short, e.g. what was bought), "
+        f"category (choose the single best fit from: {cats}). "
+        "If a value is unknown use null for strings and 0 for amount. JSON only."
+    )
+    chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"receipt-{uuidlib.uuid4()}", system_message=system).with_model(
+        "gemini", "gemini-3-flash-preview"
+    )
+    msg = UserMessage(text=prompt, file_contents=[ImageContent(image_base64=image_b64)])
+    raw = await chat.send_message(msg)
+    text = raw if isinstance(raw, str) else str(raw)
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:]
+    start, end = text.find("{"), text.rfind("}")
+    data = {}
+    if start != -1 and end != -1:
+        try:
+            data = json.loads(text[start:end + 1])
+        except Exception:
+            data = {}
+    cat = data.get("category")
+    if cat not in EXPENSE_CATEGORIES:
+        cat = "Other"
+    try:
+        amount = float(data.get("amount") or 0)
+    except Exception:
+        amount = 0.0
+    return {
+        "amount": round(amount, 2),
+        "currency": data.get("currency") or "GBP",
+        "date": data.get("date") or today_iso_date(),
+        "merchant": data.get("merchant") or "",
+        "description": data.get("description") or (data.get("merchant") or ""),
+        "category": cat,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
 class RegisterIn(BaseModel):
@@ -307,6 +415,7 @@ class ExpenseIn(BaseModel):
     description: str = ""
     amount: float
     date: str  # ISO date
+    receipt_path: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -471,7 +580,12 @@ async def email_invoice(invoice_id: str, user: dict = Depends(get_current_user))
     subject = f"Invoice {inv.get('number','')} from {biz_name}"
     html = build_invoice_email_html(inv, user, client)
     email_id = await send_email(to=to, subject=subject, html=html, reply_to=user.get("email"))
-    return {"ok": True, "email_id": email_id, "sent_to": to}
+    # Confirmation of sending: record when emailed, and auto-mark drafts as sent
+    updates = {"emailed_at": today_iso_date()}
+    if inv.get("status") == "draft":
+        updates["status"] = "sent"
+    await db.invoices.update_one({"id": invoice_id}, {"$set": updates})
+    return {"ok": True, "email_id": email_id, "sent_to": to, "emailed_at": updates["emailed_at"], "status": updates.get("status", inv.get("status"))}
 
 
 @api_router.delete("/invoices/{invoice_id}")
@@ -510,6 +624,71 @@ async def update_expense(expense_id: str, body: ExpenseIn, user: dict = Depends(
 async def delete_expense(expense_id: str, user: dict = Depends(get_current_user)):
     await db.expenses.update_one({"id": expense_id, "user_id": user["id"]}, {"$set": {"deleted_at": now_iso()}})
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Receipt scan (AI) + image storage
+# ---------------------------------------------------------------------------
+class ScanIn(BaseModel):
+    image_base64: str
+
+
+def _verify_receipt_owner(path: str, user_id: str) -> bool:
+    # path convention: psybooks/uploads/{user_id}/{uuid}.ext
+    parts = path.split("/")
+    return len(parts) >= 3 and parts[0] == APP_NAME and parts[2] == user_id
+
+
+@api_router.post("/expenses/scan")
+async def scan_receipt(body: ScanIn, user: dict = Depends(get_current_user)):
+    b64 = body.image_base64
+    if "," in b64[:64]:
+        b64 = b64.split(",", 1)[1]
+    try:
+        raw_bytes = base64.b64decode(b64)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid image")
+
+    # Store the receipt image so the user keeps the proof
+    receipt_path = None
+    try:
+        path = f"{APP_NAME}/uploads/{user['id']}/{uuidlib.uuid4().hex}.jpg"
+        await run_in_threadpool(put_object, path, raw_bytes, "image/jpeg")
+        receipt_path = path
+    except Exception as e:
+        logger.error(f"Receipt upload failed: {e}")
+
+    # Extract fields with the vision model
+    try:
+        extracted = await extract_receipt(b64)
+    except Exception as e:
+        logger.error(f"Receipt extraction failed: {e}")
+        raise HTTPException(status_code=502, detail="Could not read the receipt. Try a clearer photo.")
+
+    extracted["receipt_path"] = receipt_path
+    return extracted
+
+
+@api_router.get("/files/{path:path}")
+async def get_file(path: str, token: Optional[str] = None, cred: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False))):
+    jwt_token = token or (cred.credentials if cred else None)
+    if not jwt_token:
+        raise HTTPException(status_code=401, detail="Missing token")
+    try:
+        payload = jwt.decode(jwt_token, JWT_SECRET, algorithms=[JWT_ALG])
+        user_id = payload.get("sub")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    if not _verify_receipt_owner(path, user_id):
+        raise HTTPException(status_code=403, detail="Not allowed")
+    try:
+        content, ctype = await run_in_threadpool(get_object, path)
+    except Exception:
+        raise HTTPException(status_code=404, detail="File not found")
+    from fastapi import Response
+    return Response(content=content, media_type=ctype)
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -594,7 +773,7 @@ def in_range(d: Optional[str], start: str, end: str) -> bool:
 
 
 @api_router.get("/summary")
-async def summary(start: str, end: str, user: dict = Depends(get_current_user)):
+async def summary(start: str, end: str, group: str = "month", user: dict = Depends(get_current_user)):
     invoices = await db.invoices.find({"user_id": user["id"], "deleted_at": None}, {"_id": 0}).to_list(2000)
     expenses = await db.expenses.find({"user_id": user["id"], "deleted_at": None}, {"_id": 0}).to_list(2000)
 
@@ -614,27 +793,44 @@ async def summary(start: str, end: str, user: dict = Depends(get_current_user)):
         c = e.get("category", "Other")
         by_cat[c] = round(by_cat.get(c, 0) + e.get("amount", 0), 2)
 
-    # monthly cashflow (income vs expenses) within range
-    months: dict = {}
+    # cashflow bucketed by group: day (YYYY-MM-DD), week (ISO week start), month (YYYY-MM)
+    def bucket_key(d: str) -> str:
+        d = (d or "")[:10]
+        if len(d) < 10:
+            return ""
+        if group == "day":
+            return d
+        if group == "week":
+            try:
+                dt = datetime.strptime(d, "%Y-%m-%d")
+                monday = dt - timedelta(days=dt.weekday())
+                return monday.strftime("%Y-%m-%d")
+            except Exception:
+                return d
+        return d[:7]  # month
+
+    buckets: dict = {}
     for i in inv_in:
-        m = (i.get("issue_date") or "")[:7]
-        if m:
-            months.setdefault(m, {"income": 0, "expenses": 0})
-            months[m]["income"] = round(months[m]["income"] + i.get("total", 0), 2)
+        k = bucket_key(i.get("issue_date"))
+        if k:
+            buckets.setdefault(k, {"income": 0, "expenses": 0})
+            buckets[k]["income"] = round(buckets[k]["income"] + i.get("total", 0), 2)
     for e in exp_in:
-        m = (e.get("date") or "")[:7]
-        if m:
-            months.setdefault(m, {"income": 0, "expenses": 0})
-            months[m]["expenses"] = round(months[m]["expenses"] + e.get("amount", 0), 2)
-    cashflow = [{"month": k, **v} for k, v in sorted(months.items())]
+        k = bucket_key(e.get("date"))
+        if k:
+            buckets.setdefault(k, {"income": 0, "expenses": 0})
+            buckets[k]["expenses"] = round(buckets[k]["expenses"] + e.get("amount", 0), 2)
+    cashflow = [{"bucket": k, "month": k, **v} for k, v in sorted(buckets.items())]
 
     return {
         "start": start,
         "end": end,
+        "group": group,
         "sales": sales,
         "paid": paid,
         "outstanding": outstanding,
         "expenses": total_expenses,
+        "net": round(sales - total_expenses, 2),
         "invoice_count": len(inv_in),
         "expense_count": len(exp_in),
         "tax": tax,
@@ -705,3 +901,12 @@ app.add_middleware(
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
+
+
+@app.on_event("startup")
+async def startup_storage():
+    try:
+        await run_in_threadpool(init_storage)
+        logger.info("Object storage initialised")
+    except Exception as e:
+        logger.error(f"Storage init failed (will retry on first upload): {e}")

@@ -11,6 +11,7 @@ import { useIconFonts } from "@/src/hooks/use-icon-fonts";
 import { ThemeProvider, useTheme } from "@/src/theme/ThemeProvider";
 import { AuthProvider } from "@/src/context/AuthContext";
 import { ToastProvider } from "@/src/components/Toast";
+import { BiometricProvider } from "@/src/context/BiometricContext";
 
 // Disable logbox errors etc so that users can see the app
 // and agent works as expected.
@@ -59,8 +60,10 @@ export default function RootLayout() {
           <KeyboardProvider>
             <AuthProvider>
               <ToastProvider>
-                <ThemedStatusBar />
-                <RootStack />
+                <BiometricProvider>
+                  <ThemedStatusBar />
+                  <RootStack />
+                </BiometricProvider>
               </ToastProvider>
             </AuthProvider>
           </KeyboardProvider>

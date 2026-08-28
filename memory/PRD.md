@@ -37,7 +37,12 @@ Mobile Mini ERP for self-employed UK psychologists (teleconsultations). Manage a
 - Payments: invoices carry paid_date (set on mark-paid, cleared on revert). New /payments screen — total owed, owed grouped by client with quick mark-paid, recently-paid list. Reached from Dashboard Payments card.
 - Edit invoice: detail sheet "Edit" reopens the form prefilled; PUT persists client/dates/items/notes/status and recomputes total.
 - Export CSV: GET /api/export/csv?start=&end= (INCOME with client names, EXPENSES, SUMMARY). "Export CSV for accountant" button on Tax tab; shares file (native) / downloads (web).
-- Backend 28/28 pytest passing; frontend verified.
+## Iteration 3 (2026-06-28)
+- Send-confirmation: POST /api/invoices/{id}/email now records emailed_at and auto-marks a draft as "sent"; invoice detail caption shows "Emailed {date}".
+- Receipt photo → AI expense: expo-image-picker (camera + gallery) → POST /api/expenses/scan; image stored in Emergent Object Storage (psybooks/uploads/{user_id}/...), Gemini 3 Flash (gemini-3-flash-preview) extracts amount/currency/date/merchant/description/category. GET /api/files/{path}?token= serves owner-only. Expense stores receipt_path; list shows receipt thumbnail (expo-image).
+- Cash flow Day/Week/Month/Year: dashboard segmented control; /api/summary?group=day|week|month returns net + bucketed cashflow; hero + cash-flow card update per period. HMRC card stays annual (fiscal year) by design.
+- Biometric app-lock: expo-local-authentication (Face ID/fingerprint). BiometricProvider gates the app when enabled (lock overlay, re-auth on foreground), auto-prompts once to configure, Settings toggle. app.json permissions/plugins added (camera, photo library, Face ID, USE_BIOMETRIC). Device-only (Expo Go on a real device / build) — no-op on web preview.
+- Backend 39/39 pytest passing; frontend verified.
 
 ## Tax logic
 2024/25 England rates. Personal allowance £12,570 (tapered >£100k), basic 20% / higher 40% / additional 45%; NI Class 4: 6% (£12,570–£50,270), 2% above. No VAT.

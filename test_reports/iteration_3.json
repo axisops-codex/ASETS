@@ -1,0 +1,43 @@
+{
+  "summary": "Iteration_3 features verified end-to-end. Backend: 39/39 tests pass (17 iter1 + 11 iter2 + 11 new iter3). POST /api/expenses/scan on a synthesized receipt JPEG (14.99 TOTAL, NOTION LABS, 2024-11-15) returned amount=14.99 (±0.5), a category in the fixed list (Software), and a receipt_path 'psybooks/uploads/{user_id}/{uuid}.jpg'. GET /api/files/{path}?token=... returns 200 image for owner, 401 without token, 403 for a different user's token. Expenses persist receipt_path (POST -> GET returns it). POST /api/invoices/{id}/email records emailed_at=today and auto-marks a draft as 'sent'; sent stays sent + records emailed_at; paid stays paid + records emailed_at. GET /api/summary?group=day returns YYYY-MM-DD buckets, and net == sales - expenses for the range. Frontend (web preview, mobile 390x844): registered/logged-in user; Dashboard period segmented control (Day/Week/Month/Year) updates the hero 'Net · {label}', the Money in/out/Invoices values, and the Cash flow card caption in lock-step (Today, This week, Aug 2026, Tax year 2026/27) — HMRC card stays pinned to 'This tax year · 2026/27'. Net for Day = £250 = £300 sales - £50 expenses on today's seed. Expenses add sheet shows 'Scan a receipt' section with Take photo + Gallery buttons (no JS error). Invoices detail sheet shows caption 'Issued 1 Aug 2026 · Emailed 28 Aug 2026 · No VAT (exempt)' after emailing. Settings screen shows 'Unlock with Face ID / fingerprint' row with biometric-toggle present (disabled on web/preview as expected — expo-local-authentication is a NO-OP outside a native device build). No deprecated Expo packages detected. Only console warning observed: 'props.pointerEvents is deprecated. Use style.pointerEvents' — cosmetic RN Web warning from a library, not a bug.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter3_features.py",
+    "/app/backend/tests/test_new_features.py",
+    "/app/backend/tests/test_psybooks_api.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_iter3.xml",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py email_invoice: on send, records emailed_at unconditionally and only bumps draft->sent — correct: sent/paid statuses are preserved while still stamping emailed_at.",
+    "server.py scan_receipt: stores the image under 'psybooks/uploads/{user_id}/{uuid}.jpg' BEFORE calling the vision model, and returns 502 with a friendly message when Gemini extraction fails — good UX.",
+    "server.py get_file: verifies ownership via path prefix ('psybooks/uploads/{user_id}/...') and returns 401/403/404 correctly; supports both ?token= and Authorization Bearer headers, which is required because <img src> can't set headers on the web.",
+    "server.py summary(group=day|week|month): bucket keys are correct — day: YYYY-MM-DD, week: Monday-anchored YYYY-MM-DD, month: YYYY-MM. Net = sales - expenses is computed for the whole range (not per-bucket), which is what the hero card needs.",
+    "Frontend index.tsx: same 'range.label' feeds both hero and the Cash flow caption, so they cannot drift; HMRC card is intentionally decoupled and always shows 'This tax year · {fy.label}'.",
+    "Frontend expenses.tsx: 'Scan a receipt' section renders unconditionally in the add-sheet; 'Take photo' and 'Gallery' both have testIDs; a Rescan link is provided after a successful scan; receipt thumbnails use expo-image with getFileUrl() from /api/client.ts (which appends ?token=<jwt> — matches backend).",
+    "BiometricContext.tsx correctly stores an 'on|off' preference in secure storage and is safe to render on web (LocalAuthentication imports guarded); the Settings toggle is disabled when unsupported — acceptable web behavior."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter3_features.py"
+  ],
+  "success_rate": {
+    "backend": "100% (39/39, including 11 new iter3 tests)",
+    "frontend": "100% for all 4 iter3 UI flows verified (period segmented control, expense scan section, invoice 'Emailed' caption, Settings biometric toggle)"
+  },
+  "seed_data_creation": "Test users iter3_*@psybooks.com, web3_*@psybooks.com, invmail_*@psybooks.com. Clients TEST_ResendClient (delivered@resend.dev), TEST_SumClient, TEST_NoEmailClient. Invoices INV-000x mixed draft/sent/paid; one scanned expense TEST_ScannedNotion (£14.99, Software) with a real receipt_path pointing to Emergent Object Storage. No cleanup — MVP DB.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend BASE URL: EXPO_PUBLIC_BACKEND_URL. Frontend needs to log in via the visible /login form (input[0]=email, input[1]=password, click a 'Sign in' element) because AsyncStorage on web is IndexedDB-backed, so pre-seeding localStorage.setItem('psybooks_token',…) does NOT work. To bypass @gorhom/bottom-sheet gesture handler on web, use page.evaluate to call element.click() on testID selectors. For receipt scan tests, build a real PIL-drawn JPEG with visible merchant/date/TOTAL text — solid-color or blank images fail image_testing.md rules and confuse the vision model. Period labels are dynamic ('Today'/'This week'/'Aug 2026'/'Tax year 2026/27') — DO NOT hard-code 'This month'/'This year'; instead assert hero_label === cashflow_label per period.",
+  "rca_of_issue": "No product bug found. Initial frontend test had an incorrect expectation ('This month' / 'This year') — the app actually shows the concrete month ('Aug 2026') and fiscal-year label ('Tax year 2026/27'), which is the intended behaviour and matches the HMRC-year exclusion (HMRC card always says 'This tax year'). Test assertion was relaxed to require hero and cashflow labels to be equal per period."
+}

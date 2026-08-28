@@ -372,7 +372,7 @@ export default function Invoices() {
                 <AppText variant="heading" color={colors.brand}>{gbp(selected.total)}</AppText>
               </View>
               <AppText variant="caption" style={{ marginTop: 4 }}>
-                Issued {prettyDate(selected.issue_date)}{selected.paid_date ? ` · Paid ${prettyDate(selected.paid_date)}` : ""} · No VAT (exempt)
+                Issued {prettyDate(selected.issue_date)}{selected.paid_date ? ` · Paid ${prettyDate(selected.paid_date)}` : ""}{selected.emailed_at ? ` · Emailed ${prettyDate(selected.emailed_at)}` : ""} · No VAT (exempt)
               </AppText>
             </Card>
 

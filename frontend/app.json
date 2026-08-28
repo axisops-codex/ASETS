@@ -10,7 +10,12 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.emergent.freelancefinance.rrbth8"
+      "bundleIdentifier": "com.emergent.freelancefinance.rrbth8",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Scan receipts to log your expenses",
+        "NSPhotoLibraryUsageDescription": "Attach receipt photos to expenses",
+        "NSFaceIDUsageDescription": "Unlock PsyBooks with Face ID"
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -18,7 +23,8 @@
         "backgroundColor": "#000000"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.emergent.freelancefinance.rrbth8"
+      "package": "com.emergent.freelancefinance.rrbth8",
+      "permissions": ["CAMERA", "USE_BIOMETRIC", "USE_FINGERPRINT"]
     },
     "web": {
       "bundler": "metro",
@@ -36,7 +42,18 @@
           "backgroundColor": "#000000"
         }
       ],
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Attach receipt photos to expenses",
+          "cameraPermission": "Scan receipts to log your expenses"
+        }
+      ],
+      [
+        "expo-local-authentication",
+        { "faceIDPermission": "Unlock PsyBooks with Face ID" }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

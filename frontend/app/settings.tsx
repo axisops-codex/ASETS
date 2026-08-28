@@ -7,6 +7,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useTheme } from "@/src/theme/ThemeProvider";
 import { useAuth } from "@/src/context/AuthContext";
+import { useBiometric } from "@/src/context/BiometricContext";
 import { api } from "@/src/api/client";
 import { useToast } from "@/src/components/Toast";
 import { AppText, Card, Field, PrimaryButton, IconButton, Divider } from "@/src/components/ui";
@@ -23,6 +24,7 @@ export default function Settings() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user, logout, refreshUser } = useAuth();
+  const { supported: bioSupported, enabled: bioEnabled, enable: bioEnable, disable: bioDisable } = useBiometric();
   const toast = useToast();
 
   const [name, setName] = useState(user?.name || "");
@@ -63,6 +65,18 @@ export default function Settings() {
     setMode(m);
     const settings = { ...(user?.settings || {}), theme: m };
     api.updateProfile({ settings }).then(refreshUser).catch(() => {});
+  };
+
+  const toggleBiometric = async () => {
+    Haptics.selectionAsync().catch(() => {});
+    if (bioEnabled) {
+      await bioDisable();
+      toast.show("App lock turned off", "success");
+    } else {
+      const ok = await bioEnable();
+      if (ok) toast.show("App lock turned on", "success");
+      else toast.show("Could not verify — try again", "error");
+    }
   };
 
   return (
@@ -117,6 +131,30 @@ export default function Settings() {
                 {i < CARD_OPTIONS.length - 1 && <View style={{ height: 1, backgroundColor: colors.divider }} />}
               </View>
             ))}
+          </Card>
+        </View>
+
+        {/* Security */}
+        <View style={{ gap: spacing.sm }}>
+          <AppText variant="label">Security</AppText>
+          <Card>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}>
+              <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: colors.brandTertiary, alignItems: "center", justifyContent: "center" }}>
+                <Ionicons name="finger-print" size={18} color={colors.brand} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <AppText variant="body" style={{ fontWeight: "600" }}>Unlock with Face ID / fingerprint</AppText>
+                <AppText variant="caption">{bioSupported ? "Require biometrics to open the app" : "Set up Face ID or a fingerprint on your device first"}</AppText>
+              </View>
+              <Switch
+                testID="biometric-toggle"
+                value={bioEnabled}
+                disabled={!bioSupported}
+                onValueChange={toggleBiometric}
+                trackColor={{ true: colors.brand, false: colors.borderStrong }}
+                thumbColor="#fff"
+              />
+            </View>
           </Card>
         </View>
 
