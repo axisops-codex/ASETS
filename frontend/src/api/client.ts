@@ -55,6 +55,7 @@ export const api = {
   createInvoice: (body: any) => request("/invoices", { method: "POST", body: JSON.stringify(body) }),
   updateInvoice: (id: string, body: any) => request(`/invoices/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteInvoice: (id: string) => request(`/invoices/${id}`, { method: "DELETE" }),
+  emailInvoice: (id: string) => request(`/invoices/${id}/email`, { method: "POST" }),
 
   expenses: () => request("/expenses"),
   createExpense: (body: any) => request("/expenses", { method: "POST", body: JSON.stringify(body) }),
@@ -62,4 +63,5 @@ export const api = {
   deleteExpense: (id: string) => request(`/expenses/${id}`, { method: "DELETE" }),
 
   summary: (start: string, end: string) => request(`/summary?start=${start}&end=${end}`),
+  exportCsv: (start: string, end: string) => request(`/export/csv?start=${start}&end=${end}`),
 };

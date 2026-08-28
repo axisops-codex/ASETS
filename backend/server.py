@@ -12,9 +12,19 @@ import uuid
 from datetime import datetime, timezone, date
 import jwt
 import bcrypt
+import re
+import ipaddress
+import httpx
+from html import escape
+from html.parser import HTMLParser
+from urllib.parse import urlparse
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+
+EMAIL_BASE_URL = "https://integrations.emergentagent.com"
+EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY", "")
+EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "PsyBooks")
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
@@ -38,6 +48,10 @@ logger = logging.getLogger("psybooks")
 # ---------------------------------------------------------------------------
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def today_iso_date() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
 
 
 def new_id() -> str:
@@ -87,6 +101,149 @@ def public_user(u: dict) -> dict:
         "utr": u.get("utr", ""),
         "settings": u.get("settings", {}),
     }
+
+
+# ---------------------------------------------------------------------------
+# Email (Emergent managed Resend) — send invoice to client
+# ---------------------------------------------------------------------------
+_SHORTENERS = ("bit.ly", "tinyurl.com", "t.co", "is.gd", "cutt.ly", "goo.gl", "rebrand.ly")
+_CRED_ASK = ("reply with your password", "reply with the code", "send your password", "cvv",
+             "send us your password", "enter your password below", "confirm your card number",
+             "your full card number", "seed phrase", "recovery phrase", "verify your card",
+             "social security number", "confirm your bank details")
+_HOSTISH = re.compile(r"\b(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,})", re.I)
+
+
+def _host_ok(host: str) -> bool:
+    if not host or "xn--" in host:
+        return False
+    try:
+        ipaddress.ip_address(host)
+        return False
+    except ValueError:
+        pass
+    return not any(host == s or host.endswith("." + s) for s in _SHORTENERS)
+
+
+def _same_site(shown: str, real: str) -> bool:
+    return shown == real or real.endswith("." + shown) or shown.endswith("." + real)
+
+
+class _EmailScan(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.tags, self.urls, self.anchors = set(), [], []
+        self._href, self._text = None, []
+
+    def handle_starttag(self, tag, attrs):
+        self.tags.add(tag.lower())
+        self.urls += [v for k, v in attrs if k.lower() in ("href", "src") and v]
+        if tag.lower() == "a":
+            self._href = dict((k.lower(), v) for k, v in attrs).get("href")
+            self._text = []
+
+    def handle_data(self, data):
+        if self._href is not None:
+            self._text.append(data)
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "a" and self._href is not None:
+            self.anchors.append((self._href, "".join(self._text)))
+            self._href, self._text = None, []
+
+
+def _assert_safe_email(subject: str, html: str) -> None:
+    scan = _EmailScan()
+    scan.feed(html)
+    if scan.tags & {"form", "input", "textarea", "select"}:
+        raise ValueError("No forms or input fields in email (G2)")
+    body = f"{subject}\n{html}".lower()
+    for p in _CRED_ASK:
+        if p in body:
+            raise ValueError(f"Email asks the recipient for credentials: {p!r} (G2)")
+    for url in scan.urls:
+        low = url.strip().lower()
+        if low.startswith(("mailto:", "tel:", "cid:", "#")):
+            continue
+        if not low.startswith("https://"):
+            raise ValueError(f"Email links/assets must be absolute https: {url!r} (G3)")
+        host = urlparse(low).hostname or ""
+        if not _host_ok(host) or urlparse(low).username is not None:
+            raise ValueError(f"Shortened, numeric-host or credential-bearing URL: {url!r} (G3)")
+    for href, text in scan.anchors:
+        real = urlparse(href.strip().lower()).hostname or ""
+        if not real:
+            continue
+        for m in _HOSTISH.finditer(text):
+            if not _same_site(m.group(1).lower(), real):
+                raise ValueError(f"Anchor text {m.group(1)!r} != real link host {real!r} (G3)")
+
+
+async def send_email(*, to: str, subject: str, html: str, reply_to: Optional[str] = None) -> Optional[str]:
+    _assert_safe_email(subject, html)
+    payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
+    if reply_to:
+        payload["contact_email"] = reply_to
+    try:
+        async with httpx.AsyncClient(timeout=30) as hc:
+            resp = await hc.post(
+                f"{EMAIL_BASE_URL}/api/v1/email/send",
+                headers={"X-Email-Key": EMAIL_KEY},
+                json=payload,
+            )
+        resp.raise_for_status()
+        return resp.json().get("id")
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Email send failed: {e.response.status_code} {e.response.text}")
+        raise HTTPException(status_code=502, detail="Could not send the email")
+    except Exception as e:
+        logger.error(f"Email send error: {e}")
+        raise HTTPException(status_code=500, detail="Could not send the email")
+
+
+def _money(n: float) -> str:
+    return f"£{(n or 0):,.2f}"
+
+
+def build_invoice_email_html(inv: dict, biz: dict, client: dict) -> str:
+    biz_name = escape(biz.get("business_name") or biz.get("name") or "PsyBooks")
+    rows = ""
+    for it in inv.get("items", []):
+        amt = (it.get("quantity", 0) or 0) * (it.get("unit_price", 0) or 0)
+        rows += (
+            f'<tr><td style="padding:8px 4px;border-bottom:1px solid #eee;font-size:14px">{escape(str(it.get("description","")))}</td>'
+            f'<td style="padding:8px 4px;border-bottom:1px solid #eee;font-size:14px;text-align:right">{it.get("quantity",0)}</td>'
+            f'<td style="padding:8px 4px;border-bottom:1px solid #eee;font-size:14px;text-align:right">{_money(it.get("unit_price",0))}</td>'
+            f'<td style="padding:8px 4px;border-bottom:1px solid #eee;font-size:14px;text-align:right">{_money(amt)}</td></tr>'
+        )
+    notes = ""
+    if inv.get("notes"):
+        notes = (f'<p style="margin-top:20px;padding:14px;background:#F0F0EE;border-radius:10px;'
+                 f'font-size:13px;color:#4A4D4A">{escape(inv["notes"])}</p>')
+    return (
+        f'<table role="presentation" width="100%" style="max-width:560px;margin:0 auto;'
+        f'font-family:Arial,Helvetica,sans-serif;color:#1A1C1A"><tr><td style="padding:24px">'
+        f'<p style="font-size:20px;font-weight:bold;color:#5F7161;margin:0">{biz_name}</p>'
+        f'<h1 style="font-size:26px;margin:6px 0 2px">Invoice {escape(inv.get("number",""))}</h1>'
+        f'<p style="color:#888;font-size:13px;margin:0">Issued {escape(inv.get("issue_date",""))}'
+        + (f' · Due {escape(inv["due_date"])}' if inv.get("due_date") else "")
+        + f'</p>'
+        f'<p style="font-size:14px;margin:16px 0 4px"><strong>Billed to:</strong> {escape(client.get("name",""))}</p>'
+        f'<table role="presentation" width="100%" style="border-collapse:collapse;margin-top:12px">'
+        f'<tr><th style="text-align:left;font-size:11px;color:#9a9e9a;padding:8px 4px;border-bottom:2px solid #E5E5E3">DESCRIPTION</th>'
+        f'<th style="text-align:right;font-size:11px;color:#9a9e9a;padding:8px 4px;border-bottom:2px solid #E5E5E3">QTY</th>'
+        f'<th style="text-align:right;font-size:11px;color:#9a9e9a;padding:8px 4px;border-bottom:2px solid #E5E5E3">RATE</th>'
+        f'<th style="text-align:right;font-size:11px;color:#9a9e9a;padding:8px 4px;border-bottom:2px solid #E5E5E3">AMOUNT</th></tr>'
+        f'{rows}</table>'
+        f'<p style="text-align:right;font-size:22px;font-weight:bold;margin:18px 0 0">Total: {_money(inv.get("total",0))}</p>'
+        f'<p style="text-align:right;font-size:12px;color:#888;margin:2px 0">No VAT — exempt healthcare services.</p>'
+        f'{notes}'
+        f'<p style="font-size:12px;color:#888;margin-top:28px">Sent via PsyBooks on behalf of {biz_name}. '
+        f'Reply to this email to reach them. We never ask for your password or card details by email.</p>'
+        f'</td></tr></table>'
+    )
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +299,7 @@ class InvoiceUpdate(BaseModel):
     due_date: Optional[str] = None
     items: Optional[List[InvoiceItem]] = None
     notes: Optional[str] = None
+    paid_date: Optional[str] = None
 
 
 class ExpenseIn(BaseModel):
@@ -267,6 +425,7 @@ async def create_invoice(body: InvoiceIn, user: dict = Depends(get_current_user)
         "notes": body.notes,
         "status": body.status,
         "total": invoice_total(items),
+        "paid_date": today_iso_date() if body.status == "paid" else None,
         "created_at": now_iso(),
         "deleted_at": None,
     }
@@ -285,11 +444,34 @@ async def update_invoice(invoice_id: str, body: InvoiceUpdate, user: dict = Depe
     if "items" in updates:
         updates["items"] = [it if isinstance(it, dict) else it.dict() for it in updates["items"]]
         updates["total"] = invoice_total(updates["items"])
+    if "status" in updates:
+        if updates["status"] == "paid":
+            updates["paid_date"] = body.paid_date or inv.get("paid_date") or today_iso_date()
+        else:
+            updates["paid_date"] = None
     if updates:
         await db.invoices.update_one({"id": invoice_id}, {"$set": updates})
     doc = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
     await enrich_invoice(doc, user["id"])
     return doc
+
+
+@api_router.post("/invoices/{invoice_id}/email")
+async def email_invoice(invoice_id: str, user: dict = Depends(get_current_user)):
+    inv = await db.invoices.find_one({"id": invoice_id, "user_id": user["id"], "deleted_at": None}, {"_id": 0})
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    client = await db.clients.find_one({"id": inv.get("client_id"), "user_id": user["id"]}, {"_id": 0})
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    to = (client.get("email") or "").strip()
+    if not to:
+        raise HTTPException(status_code=400, detail="Add an email to this client first")
+    biz_name = user.get("business_name") or user.get("name") or "your therapist"
+    subject = f"Invoice {inv.get('number','')} from {biz_name}"
+    html = build_invoice_email_html(inv, user, client)
+    email_id = await send_email(to=to, subject=subject, html=html, reply_to=user.get("email"))
+    return {"ok": True, "email_id": email_id, "sent_to": to}
 
 
 @api_router.delete("/invoices/{invoice_id}")
@@ -459,6 +641,49 @@ async def summary(start: str, end: str, user: dict = Depends(get_current_user)):
         "expenses_by_category": [{"category": k, "amount": v} for k, v in sorted(by_cat.items(), key=lambda x: -x[1])],
         "cashflow": cashflow,
     }
+
+
+@api_router.get("/export/csv")
+async def export_csv(start: str, end: str, user: dict = Depends(get_current_user)):
+    invoices = await db.invoices.find({"user_id": user["id"], "deleted_at": None}, {"_id": 0}).to_list(2000)
+    expenses = await db.expenses.find({"user_id": user["id"], "deleted_at": None}, {"_id": 0}).to_list(2000)
+    clients = await db.clients.find({"user_id": user["id"]}, {"_id": 0, "id": 1, "name": 1}).to_list(500)
+    cmap = {c["id"]: c.get("name", "") for c in clients}
+    inv_in = sorted([i for i in invoices if in_range(i.get("issue_date"), start, end)], key=lambda x: x.get("issue_date", ""))
+    exp_in = sorted([e for e in expenses if in_range(e.get("date"), start, end)], key=lambda x: x.get("date", ""))
+
+    def esc(v) -> str:
+        s = "" if v is None else str(v)
+        if any(c in s for c in [",", '"', "\n"]):
+            s = '"' + s.replace('"', '""') + '"'
+        return s
+
+    lines = [f"PsyBooks export,{start} to {end}", "", "INCOME (Invoices)",
+             "Date,Invoice,Client,Description,Amount,Status,Paid date"]
+    sales = 0.0
+    for i in inv_in:
+        desc = "; ".join(str(it.get("description", "")) for it in i.get("items", []))
+        sales += i.get("total", 0) or 0
+        lines.append(",".join(esc(x) for x in [i.get("issue_date"), i.get("number"), cmap.get(i.get("client_id"), ""),
+                     desc, f"{i.get('total',0):.2f}", i.get("status"), i.get("paid_date") or ""]))
+    lines += ["", "EXPENSES", "Date,Category,Description,Amount"]
+    total_exp = 0.0
+    for e in exp_in:
+        total_exp += e.get("amount", 0) or 0
+        lines.append(",".join(esc(x) for x in [e.get("date"), e.get("category"), e.get("description") or "", f"{e.get('amount',0):.2f}"]))
+
+    tax = compute_tax(sales, total_exp)
+    lines += ["", "SUMMARY",
+              f"Total sales,{sales:.2f}",
+              f"Total expenses,{total_exp:.2f}",
+              f"Taxable profit,{tax['profit']:.2f}",
+              f"Income tax (est),{tax['income_tax']:.2f}",
+              f"National Insurance (est),{tax['national_insurance']:.2f}",
+              f"Tax to set aside (est),{tax['total_due']:.2f}",
+              f"Take home (est),{tax['take_home']:.2f}",
+              "", "No VAT charged - exempt healthcare services. Estimates based on 2024/25 rates."]
+    csv = "\n".join(lines)
+    return {"csv": csv, "filename": f"psybooks_{start}_to_{end}.csv"}
 
 
 @api_router.get("/")

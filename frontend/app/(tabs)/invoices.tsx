@@ -34,6 +34,8 @@ export default function Invoices() {
   const createRef = useRef<BottomSheet>(null);
   const detailRef = useRef<BottomSheet>(null);
   const [selected, setSelected] = useState<any>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [emailing, setEmailing] = useState(false);
 
   // form
   const [clientId, setClientId] = useState("");
@@ -86,9 +88,26 @@ export default function Invoices() {
       router.push("/clients");
       return;
     }
+    setEditingId(null);
     resetForm();
     setClientId((prev) => prev || clients[0]?.id || "");
     createRef.current?.expand();
+  };
+
+  const openEdit = (inv: any) => {
+    detailRef.current?.close();
+    setEditingId(inv.id);
+    setClientId(inv.client_id);
+    setIssueDate(inv.issue_date ? new Date(inv.issue_date) : new Date());
+    setDueDate(inv.due_date ? new Date(inv.due_date) : null);
+    setItems(
+      inv.items?.length
+        ? inv.items.map((it: any) => ({ description: it.description, quantity: String(it.quantity), unit_price: String(it.unit_price) }))
+        : [{ description: "", quantity: "1", unit_price: "" }]
+    );
+    setNotes(inv.notes || "");
+    setStatus(inv.status);
+    setTimeout(() => createRef.current?.expand(), 260);
   };
 
   const total = items.reduce((s, it) => s + (parseFloat(it.quantity || "0") || 0) * (parseFloat(it.unit_price || "0") || 0), 0);
@@ -97,27 +116,44 @@ export default function Invoices() {
     if (!clientId) return toast.show("Choose a client", "error");
     if (total <= 0) return toast.show("Add at least one line with an amount", "error");
     setSaving(true);
+    const payload = {
+      client_id: clientId,
+      issue_date: toISODate(issueDate),
+      due_date: dueDate ? toISODate(dueDate) : null,
+      items: items.map((it) => ({
+        description: it.description,
+        quantity: parseFloat(it.quantity || "0") || 0,
+        unit_price: parseFloat(it.unit_price || "0") || 0,
+      })),
+      notes,
+      status,
+    };
     try {
-      await api.createInvoice({
-        client_id: clientId,
-        issue_date: toISODate(issueDate),
-        due_date: dueDate ? toISODate(dueDate) : null,
-        items: items.map((it) => ({
-          description: it.description,
-          quantity: parseFloat(it.quantity || "0") || 0,
-          unit_price: parseFloat(it.unit_price || "0") || 0,
-        })),
-        notes,
-        status,
-      });
+      if (editingId) await api.updateInvoice(editingId, payload);
+      else await api.createInvoice(payload);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       createRef.current?.close();
-      toast.show("Invoice created", "success");
+      toast.show(editingId ? "Invoice updated" : "Invoice created", "success");
+      setEditingId(null);
       load();
     } catch (e: any) {
       toast.show(e.message || "Could not save", "error");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const doEmail = async () => {
+    if (!selected) return;
+    setEmailing(true);
+    try {
+      const r = await api.emailInvoice(selected.id);
+      toast.show(`Emailed to ${r.sent_to}`, "success");
+      detailRef.current?.close();
+    } catch (e: any) {
+      toast.show(e.message || "Could not send email", "error");
+    } finally {
+      setEmailing(false);
     }
   };
 
@@ -209,7 +245,7 @@ export default function Invoices() {
 
       {/* Create sheet */}
       <AppSheet ref={createRef}>
-        <AppText variant="title">New invoice</AppText>
+        <AppText variant="title">{editingId ? "Edit invoice" : "New invoice"}</AppText>
 
         <AppText variant="label">Client</AppText>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.sm }}>
@@ -292,7 +328,7 @@ export default function Invoices() {
           <AppText variant="title" color={colors.brand}>{gbp(total)}</AppText>
         </View>
 
-        <PrimaryButton title="Save invoice" onPress={save} loading={saving} testID="invoice-save-button" />
+        <PrimaryButton title={editingId ? "Save changes" : "Save invoice"} onPress={save} loading={saving} testID="invoice-save-button" />
 
         {picker && (
           <DateTimePicker
@@ -335,13 +371,25 @@ export default function Invoices() {
                 <AppText variant="heading">Total</AppText>
                 <AppText variant="heading" color={colors.brand}>{gbp(selected.total)}</AppText>
               </View>
-              <AppText variant="caption" style={{ marginTop: 4 }}>Issued {prettyDate(selected.issue_date)} · No VAT (exempt)</AppText>
+              <AppText variant="caption" style={{ marginTop: 4 }}>
+                Issued {prettyDate(selected.issue_date)}{selected.paid_date ? ` · Paid ${prettyDate(selected.paid_date)}` : ""} · No VAT (exempt)
+              </AppText>
             </Card>
 
             <PrimaryButton title="Share PDF" icon="share-outline" onPress={doShare} testID="invoice-share-button" />
-            {selected.status !== "paid" && (
-              <PrimaryButton title="Mark as paid" icon="checkmark-circle-outline" variant="secondary" onPress={markPaid} testID="invoice-mark-paid-button" />
-            )}
+            {clients.find((c) => c.id === selected.client_id)?.email ? (
+              <PrimaryButton title="Send by email" icon="mail-outline" variant="outline" onPress={doEmail} loading={emailing} testID="invoice-email-button" />
+            ) : null}
+            <View style={{ flexDirection: "row", gap: spacing.md }}>
+              <View style={{ flex: 1 }}>
+                <PrimaryButton title="Edit" icon="create-outline" variant="outline" onPress={() => openEdit(selected)} testID="invoice-edit-button" />
+              </View>
+              {selected.status !== "paid" && (
+                <View style={{ flex: 1 }}>
+                  <PrimaryButton title="Mark paid" icon="checkmark-circle-outline" variant="secondary" onPress={markPaid} testID="invoice-mark-paid-button" />
+                </View>
+              )}
+            </View>
             <Pressable onPress={removeInvoice} style={{ alignItems: "center", paddingVertical: spacing.md }} testID="invoice-delete-button">
               <AppText variant="body" color={colors.error} style={{ fontWeight: "600" }}>Delete invoice</AppText>
             </Pressable>

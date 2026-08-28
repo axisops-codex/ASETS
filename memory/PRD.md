@@ -32,6 +32,13 @@ Mobile Mini ERP for self-employed UK psychologists (teleconsultations). Manage a
 - Settings: theme light/dark/system, dashboard card toggles, business profile (used on invoices).
 - Backend 17/17 pytest passing; frontend E2E validated.
 
+## Iteration 2 (2026-06-28)
+- Email invoice: POST /api/invoices/{id}/email via Emergent-managed Resend (from_name=PsyBooks, reply-to=psychologist, recipient=client's stored email, server-side HTML template, guardrail gate). "Send by email" button in invoice detail (shown only when client has email).
+- Payments: invoices carry paid_date (set on mark-paid, cleared on revert). New /payments screen — total owed, owed grouped by client with quick mark-paid, recently-paid list. Reached from Dashboard Payments card.
+- Edit invoice: detail sheet "Edit" reopens the form prefilled; PUT persists client/dates/items/notes/status and recomputes total.
+- Export CSV: GET /api/export/csv?start=&end= (INCOME with client names, EXPENSES, SUMMARY). "Export CSV for accountant" button on Tax tab; shares file (native) / downloads (web).
+- Backend 28/28 pytest passing; frontend verified.
+
 ## Tax logic
 2024/25 England rates. Personal allowance £12,570 (tapered >£100k), basic 20% / higher 40% / additional 45%; NI Class 4: 6% (£12,570–£50,270), 2% above. No VAT.
 

@@ -35,6 +35,7 @@ function RootStack() {
       <Stack.Screen name="(auth)" />
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="clients" options={{ presentation: "card" }} />
+      <Stack.Screen name="payments" options={{ presentation: "card" }} />
       <Stack.Screen name="settings" options={{ presentation: "card" }} />
     </Stack>
   );

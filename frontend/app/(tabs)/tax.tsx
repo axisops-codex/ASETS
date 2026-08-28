@@ -15,6 +15,7 @@ import { AppSheet } from "@/src/components/AppSheet";
 import { AppText, Card, PrimaryButton, Divider } from "@/src/components/ui";
 import { gbp, fiscalYearByStartYear, fiscalYearRange, prettyDate, toISODate } from "@/src/utils/format";
 import { shareTaxPdf, taxReportText } from "@/src/utils/pdf";
+import { shareCsv } from "@/src/utils/csv";
 
 export default function TaxScreen() {
   const { colors, spacing, radius } = useTheme();
@@ -81,6 +82,19 @@ export default function TaxScreen() {
       await shareTaxPdf(tax, range.label, user as any);
     } catch (e: any) {
       toast.show(e.message || "Could not export", "error");
+    }
+  };
+
+  const [exportingCsv, setExportingCsv] = useState(false);
+  const exportCsv = async () => {
+    setExportingCsv(true);
+    try {
+      const res = await api.exportCsv(range.start, range.end);
+      await shareCsv(res.csv, res.filename);
+    } catch (e: any) {
+      toast.show(e.message || "Could not export CSV", "error");
+    } finally {
+      setExportingCsv(false);
     }
   };
 
@@ -156,6 +170,7 @@ export default function TaxScreen() {
           <View style={{ gap: spacing.md }}>
             <PrimaryButton title="Download PDF" icon="download-outline" onPress={exportPdf} testID="tax-export-pdf" />
             <PrimaryButton title="Copy figures" icon="copy-outline" variant="outline" onPress={copyText} testID="tax-copy-text" />
+            <PrimaryButton title="Export CSV for accountant" icon="grid-outline" variant="outline" onPress={exportCsv} loading={exportingCsv} testID="tax-export-csv" />
           </View>
         </ScrollView>
       )}

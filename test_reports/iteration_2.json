@@ -1,0 +1,37 @@
+{
+  "summary": "Iteration_2 features verified end-to-end. Backend: 11/11 new-feature tests pass and 28/28 full suite passes (email invoice returns email_id via Resend delivered@resend.dev; 400 when client has no email; 404 for unknown invoice; paid_date is set on create-with-paid and on status->paid, and cleared when status reverts to sent/draft; PUT invoice edits client_id/dates/items/notes/status and recomputes total; GET /api/export/csv returns {csv, filename} with INCOME (client names not blank), EXPENSES and SUMMARY sections). Frontend: Dashboard 'Payments' card navigates to /payments, 'Still owed to you' totals correctly (£450 = £200 + £250), 'Who owes you' groups per client, 'Paid' quick button flips an invoice to paid, updates the total (£250 remaining), and moves the row into 'Recently paid' immediately (toast 'Marked as paid' shown). Tax tab shows 'Export CSV for accountant' and clicking it fires without any JS console error. Invoice detail sheet correctly hides 'Send by email' when client has no email, shows Edit + Mark paid for sent invoices, and shows Send-by-email but hides Mark-paid when already paid. No deprecated Expo packages detected. Web-only note (from iter_1, still applies to bottom-sheet Pressables): synthetic Playwright clicks may not bubble through @gorhom/bottom-sheet gesture handler — JS element.click() fallback was used; NOT a product bug.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_new_features.py",
+    "/app/backend/tests/test_psybooks_api.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_new_features.xml",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py update_invoice correctly nulls paid_date when status transitions away from 'paid' and stamps today when moving to 'paid' unless caller supplies an explicit paid_date — good.",
+    "email_invoice endpoint validates client existence (404), missing email (400), and delegates to send_email which enforces the safety scan (forms, credential requests, https-only, no shorteners) before calling the Resend integration.",
+    "export_csv escapes CSV cells (quotes fields containing ',', '\"', or newline) and includes a stable 'INCOME (Invoices)' + 'EXPENSES' + 'SUMMARY' layout with tax figures — accountant-ready.",
+    "invoice_total recomputes on every PUT that supplies items — no drift risk.",
+    "Frontend uses process.env.EXPO_PUBLIC_BACKEND_URL and testIDs are present on all new interactive elements (payments-total-owed, owed-client-*, mark-paid-{id}, invoice-email-button, invoice-edit-button, invoice-mark-paid-button, tax-export-csv)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_new_features.py"
+  ],
+  "success_rate": {"backend": "100% (28/28, incl. 11 new-feature tests)", "frontend": "100% for the 4 new flows verified in web preview"},
+  "seed_data_creation": "Test users webqa_*@psybooks.com and feat_*@psybooks.com; clients TEST_ClientResend / TEST_NoEmailClient / 'Web Client A' (email delivered@resend.dev) / 'Web Client B'; invoices INV-0001..INV-0003 with mixed statuses; one expense (Software £42). Prefixed TEST_ where relevant. No cleanup performed — MVP DB.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend base URL: EXPO_PUBLIC_BACKEND_URL. For frontend automation in Playwright web preview, the outer OS/urllib UA is blocked (403) by the preview; use page.evaluate(fetch(...)) inline to seed data through the app origin. To bypass @gorhom/bottom-sheet gesture handler on web, use page.evaluate to call HTMLElement.click() on testID selectors instead of page.click. Payments screen is reached from the Dashboard 'Payments' card whose testID is 'card-outstanding'.",
+  "rca_of_issue": "No product bug found."
+}

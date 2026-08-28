@@ -134,7 +134,11 @@ export default function Dashboard() {
           )}
 
           {cards.includes("recent") && (
-            <Card testID="card-outstanding">
+            <Card testID="card-outstanding" onPress={() => router.push("/payments")}>
+              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: spacing.sm }}>
+                <AppText variant="heading">Payments</AppText>
+                <Ionicons name="chevron-forward" size={18} color={colors.onSurfaceTertiary} />
+              </View>
               <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
                 <View style={{ flex: 1 }}>
                   <AppText variant="caption">Awaiting payment</AppText>
