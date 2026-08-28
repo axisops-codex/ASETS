@@ -8,6 +8,7 @@ import { useTheme } from "@/src/theme/ThemeProvider";
 import { useAuth } from "@/src/context/AuthContext";
 import { useToast } from "@/src/components/Toast";
 import { AppText, Field, PrimaryButton, IconButton } from "@/src/components/ui";
+import { LogoMark } from "@/src/components/Logo";
 
 export default function Register() {
   const { colors, spacing } = useTheme();
@@ -48,9 +49,12 @@ export default function Register() {
           <IconButton icon="chevron-back" onPress={() => router.back()} testID="register-back-button" />
         </View>
         <View style={{ gap: spacing.sm, marginBottom: spacing.md }}>
+          <View style={{ marginBottom: spacing.sm }}>
+            <LogoMark size={52} />
+          </View>
           <AppText variant="display">Create account</AppText>
           <AppText variant="body" color={colors.onSurfaceTertiary}>
-            Your data stays private to you.
+            Join ASETS — your data stays private to you.
           </AppText>
         </View>
 

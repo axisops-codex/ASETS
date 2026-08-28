@@ -11,6 +11,7 @@ import { useBiometric } from "@/src/context/BiometricContext";
 import { api } from "@/src/api/client";
 import { useToast } from "@/src/components/Toast";
 import { AppText, Card, Field, PrimaryButton, IconButton, Divider } from "@/src/components/ui";
+import { LogoLockup } from "@/src/components/Logo";
 
 const CARD_OPTIONS = [
   { key: "take_home", label: "Estimated take home", icon: "wallet-outline" },
@@ -87,6 +88,10 @@ export default function Settings() {
       </View>
 
       <KeyboardAwareScrollView bottomOffset={24} contentContainerStyle={{ padding: spacing.lg, paddingBottom: 60, gap: spacing.lg }} keyboardShouldPersistTaps="handled">
+        <View style={{ paddingTop: spacing.xs, paddingBottom: spacing.sm }}>
+          <LogoLockup size={52} />
+        </View>
+
         {/* Appearance */}
         <View style={{ gap: spacing.sm }}>
           <AppText variant="label">Appearance</AppText>

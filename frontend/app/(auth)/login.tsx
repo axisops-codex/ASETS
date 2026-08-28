@@ -3,11 +3,11 @@ import { View, Pressable } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
 import { useTheme } from "@/src/theme/ThemeProvider";
 import { useAuth } from "@/src/context/AuthContext";
 import { useToast } from "@/src/components/Toast";
 import { AppText, Field, PrimaryButton } from "@/src/components/ui";
+import { LogoLockup } from "@/src/components/Logo";
 
 export default function Login() {
   const { colors, spacing } = useTheme();
@@ -44,22 +44,12 @@ export default function Login() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={{ gap: spacing.sm, marginBottom: spacing.lg }}>
-          <View
-            style={{
-              width: 60,
-              height: 60,
-              borderRadius: 18,
-              backgroundColor: colors.brandPrimary,
-              alignItems: "center",
-              justifyContent: "center",
-              marginBottom: spacing.md,
-            }}
-          >
-            <Ionicons name="leaf" size={30} color={colors.onBrandPrimary} />
+          <View style={{ marginBottom: spacing.md }}>
+            <LogoLockup size={64} />
           </View>
-          <AppText variant="display">Welcome back</AppText>
+          <AppText variant="title">Welcome back</AppText>
           <AppText variant="body" color={colors.onSurfaceTertiary}>
-            Sign in to manage your practice finances.
+            Sign in to stay on top of your money — calmly.
           </AppText>
         </View>
 

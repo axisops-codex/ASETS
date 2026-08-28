@@ -6,6 +6,7 @@ import { storage } from "@/src/utils/storage";
 import { useTheme } from "@/src/theme/ThemeProvider";
 import { useAuth } from "@/src/context/AuthContext";
 import { AppText, PrimaryButton } from "@/src/components/ui";
+import { LogoMark } from "@/src/components/Logo";
 
 const PREF_KEY = "psybooks_biometric"; // "on" | "off" | ""
 
@@ -50,7 +51,7 @@ export function BiometricProvider({ children }: { children: React.ReactNode }) {
     authing.current = true;
     try {
       const res = await LocalAuthentication.authenticateAsync({
-        promptMessage: "Unlock PsyBooks",
+        promptMessage: "Unlock ASETS",
         cancelLabel: "Cancel",
       });
       if (res.success) setUnlocked(true);
@@ -125,10 +126,8 @@ export function BiometricProvider({ children }: { children: React.ReactNode }) {
 
       {showLock && (
         <View style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center", gap: spacing.lg, zIndex: 10000 }} testID="biometric-lock">
-          <View style={{ width: 84, height: 84, borderRadius: 26, backgroundColor: colors.brandPrimary, alignItems: "center", justifyContent: "center" }}>
-            <Ionicons name="lock-closed" size={40} color={colors.onBrandPrimary} />
-          </View>
-          <AppText variant="title">PsyBooks is locked</AppText>
+          <LogoMark size={92} />
+          <AppText variant="title">ASETS is locked</AppText>
           <AppText variant="caption">Verify it's you to continue</AppText>
           <View style={{ width: 220 }}>
             <PrimaryButton title="Unlock" icon="finger-print" onPress={authenticate} testID="biometric-unlock-button" />
@@ -144,7 +143,7 @@ export function BiometricProvider({ children }: { children: React.ReactNode }) {
             </View>
             <AppText variant="title">Lock with Face ID / fingerprint?</AppText>
             <AppText variant="body" color={colors.onSurfaceTertiary}>
-              Keep your finances private. You'll unlock PsyBooks with your face or fingerprint each time you open it.
+              Keep your finances private. You'll unlock ASETS with your face or fingerprint each time you open it.
             </AppText>
             <PrimaryButton title="Enable" icon="lock-closed-outline" onPress={acceptPrompt} testID="biometric-enable-button" />
             <Pressable onPress={dismissPrompt} style={{ alignItems: "center", paddingVertical: spacing.sm }} testID="biometric-skip-button">

@@ -46,7 +46,7 @@ function invoiceHtml(inv: InvoiceForPdf, biz: Business, client: ClientInfo): str
     * { box-sizing: border-box; }
     body { font-family: -apple-system, Helvetica, Arial, sans-serif; color: #1A1C1A; padding: 40px; }
     .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 32px; }
-    .brand { font-size: 22px; font-weight: 700; color: #5F7161; }
+    .brand { font-size: 22px; font-weight: 700; color: #3E6FA8; }
     h1 { font-size: 30px; margin: 0; letter-spacing: -0.5px; }
     .muted { color: #6b6f6b; font-size: 13px; line-height: 1.5; }
     .grid { display: flex; justify-content: space-between; margin: 24px 0; gap: 24px; }
@@ -105,7 +105,7 @@ function invoiceHtml(inv: InvoiceForPdf, biz: Business, client: ClientInfo): str
 
     ${inv.notes ? `<div class="note">${nl2br(escapeHtml(inv.notes))}</div>` : ""}
 
-    <div class="footer">Generated with PsyBooks</div>
+    <div class="footer">Generated with ASETS</div>
   </body></html>`;
 }
 
@@ -163,20 +163,20 @@ export async function shareTaxPdf(tax: TaxData, periodLabel: string, biz: Busine
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8" />
   <style>
     body { font-family: -apple-system, Helvetica, Arial, sans-serif; color: #1A1C1A; padding: 44px; }
-    .brand { font-size: 20px; font-weight: 700; color: #5F7161; }
+    .brand { font-size: 20px; font-weight: 700; color: #3E6FA8; }
     h1 { font-size: 28px; margin: 4px 0 2px; letter-spacing: -0.5px; }
     .muted { color: #9a9e9a; font-size: 13px; }
     .receipt { margin-top: 28px; border: 1px solid #E5E5E3; border-radius: 16px; padding: 24px; max-width: 460px; }
     .line { display: flex; justify-content: space-between; padding: 11px 0; border-bottom: 1px dashed #E5E5E3; font-size: 15px; }
     .line.strong { font-weight: 700; border-bottom: 2px solid #1A1C1A; }
-    .line.big { font-size: 22px; font-weight: 700; color: #5F7161; border: none; padding-top: 16px; }
+    .line.big { font-size: 22px; font-weight: 700; color: #BC002D; border: none; padding-top: 16px; }
     table { width: 100%; border-collapse: collapse; margin: 14px 0; }
     th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:1px; color:#9a9e9a; padding:8px 4px; border-bottom:1px solid #E5E5E3;}
     td { padding: 8px 4px; font-size: 13px; }
     .num { text-align: right; }
     .footer { margin-top: 24px; font-size: 11px; color: #9a9e9a; }
   </style></head><body>
-    <div class="brand">${escapeHtml(biz.business_name || biz.name || "PsyBooks")}</div>
+    <div class="brand">${escapeHtml(biz.business_name || biz.name || "ASETS")}</div>
     <h1>HMRC Tax Estimate</h1>
     <div class="muted">${escapeHtml(periodLabel)}</div>
     <div class="receipt">

@@ -42,7 +42,12 @@ Mobile Mini ERP for self-employed UK psychologists (teleconsultations). Manage a
 - Receipt photo → AI expense: expo-image-picker (camera + gallery) → POST /api/expenses/scan; image stored in Emergent Object Storage (psybooks/uploads/{user_id}/...), Gemini 3 Flash (gemini-3-flash-preview) extracts amount/currency/date/merchant/description/category. GET /api/files/{path}?token= serves owner-only. Expense stores receipt_path; list shows receipt thumbnail (expo-image).
 - Cash flow Day/Week/Month/Year: dashboard segmented control; /api/summary?group=day|week|month returns net + bucketed cashflow; hero + cash-flow card update per period. HMRC card stays annual (fiscal year) by design.
 - Biometric app-lock: expo-local-authentication (Face ID/fingerprint). BiometricProvider gates the app when enabled (lock overlay, re-auth on foreground), auto-prompts once to configure, Settings toggle. app.json permissions/plugins added (camera, photo library, Face ID, USE_BIOMETRIC). Device-only (Expo Go on a real device / build) — no-op on web preview.
-- Backend 39/39 pytest passing; frontend verified.
+## Iteration 4 — Rebrand to ASETS (2026-06-28, frontend visual only)
+- Official name: ASETS (ADHD Self-Employed Taxes Support). Backend code unchanged.
+- New logo (src/components/Logo.tsx, react-native-svg): Hinomaru red circle (#BC002D) + soft-blue ring (#8CAFD6) + white ascending check — Japanese, minimal, empowering ("done, moving forward").
+- Regenerated app assets (icon, adaptive-icon, splash, favicon) to match logo; splash/adaptive bg white; app.json name = ASETS.
+- New palette in tokens.ts: whites + soft blues (#3E6FA8 primary) + Hinomaru red (#BC002D accent for tax/attention). Light + dark.
+- Applied logo/wordmark on login, register, settings, and biometric lock/prompt; renamed brand strings and PDF branding to ASETS with new colors.
 
 ## Tax logic
 2024/25 England rates. Personal allowance £12,570 (tapered >£100k), basic 20% / higher 40% / additional 45%; NI Class 4: 6% (£12,570–£50,270), 2% above. No VAT.
