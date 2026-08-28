@@ -1,0 +1,50 @@
+{
+  "summary": "Backend fully green (17/17 pytest passing, including HMRC tax math verified for £40k profit -> £5,486 income tax + £1,645.80 NI). Frontend E2E on Expo web mobile viewport (390x844): register -> dashboard -> add client -> create invoice -> mark paid -> add expense -> tax tab (FY chips, canvas, copy) -> settings (theme dark, cards toggle, save profile) all reachable and rendering correctly. One frontend-only note: Playwright's synthetic .click() on the PrimaryButton (Pressable) inside the @gorhom/bottom-sheet is not always registered (gesture handler intercepts pointerdown); a JS-level element.click() fires the onPress and the flow completes end-to-end (invoice with total £600.00 saved successfully, HMRC card updated). Real device taps are unaffected. No deprecated Expo packages detected (expo-print/expo-sharing used for PDF, no expo-av / expo-barcode-scanner / expo-background-fetch).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/auth/me (no token)", "issue": "Returns 403 (FastAPI HTTPBearer default) rather than 401 — the spec/UX usually expects 401 for missing bearer. Non-blocking; frontend interceptor treats both as auth failure."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "New Invoice bottom sheet / PrimaryButton", "issue": "Playwright force-click on data-testid=\"invoice-save-button\" (and mark-paid) does not fire onPress; a native element.click() works. Likely @gorhom/bottom-sheet gesture handler capturing pointerdown on web. Real mobile taps unaffected, but automated web tests need JS .click() fallback or an outer wrapper without gesture handler.", "testID": "invoice-save-button", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "New invoice sheet", "issues": ["Save invoice button sits very close to bottom safe-area on 390x844; on smaller devices it may require scrolling inside the sheet. Consider a sticky footer inside the BottomSheetScrollView."]}
+    ],
+    "react_native_issues": [
+      {"component": "props.pointerEvents", "issue": "React Native web warning: 'props.pointerEvents is deprecated. Use style.pointerEvents'. Likely coming from a third-party component (bottom-sheet backdrop or react-native-web). Non-breaking; suppress or update lib."},
+      {"component": "React 19 element.ref deprecation", "issue": "Console error: 'Accessing element.ref was removed in React 19. ref is now a regular prop.' — coming from a library (likely @gorhom/bottom-sheet 5.2.14 or react-native-gesture-handler). Non-breaking but noisy; check for lib update."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_psybooks_api.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Consider returning 401 instead of 403 for missing bearer token on protected routes (custom HTTPBearer(auto_error=False) + explicit 401).",
+    "Address React 19 element.ref console error — audit @gorhom/bottom-sheet + react-native-gesture-handler versions; the app runs but the warnings pollute logs.",
+    "Optional: replace deprecated props.pointerEvents with style.pointerEvents wherever custom (or upgrade offending dep).",
+    "Optional UX: sticky Save button inside the invoice bottom-sheet so it is always tappable without scrolling to the last item."
+  ],
+  "critical_code_review_comments": [
+    "server.py uses os.environ['MONGO_URL'] / DB_NAME / JWT_SECRET without defaults — good (fail-fast).",
+    "MongoDB _id is consistently projected out ({\"_id\": 0}) or popped in POST responses — clean.",
+    "Invoice numbering uses count_documents which includes soft-deleted invoices — safe for uniqueness but numbers may skip after deletes; acceptable for MVP.",
+    "compute_tax correctly implements PA taper >£100k, basic/higher/additional bands, and Class 4 NI 6%/2% — validated numerically.",
+    "Frontend uses process.env.EXPO_PUBLIC_BACKEND_URL and testIDs are present on all critical flows — good coverage."
+  ],
+  "updated_files": [
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/test_psybooks_api.py"
+  ],
+  "success_rate": {"backend": "100% (17/17)", "frontend": "~90% (all screens reachable, all data flows persist; save-button click needs JS fallback in Playwright only)"},
+  "seed_data_creation": "Test users (qa_*@psybooks.com) with a client 'TEST_MainClient' / 'Acme Ltd' and invoices/expenses were created via API and UI. Prefixed TEST_ where relevant. No cleanup performed — MVP DB.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend base URL: EXPO_PUBLIC_BACKEND_URL. Auth: POST /api/auth/register {email,password,name} returns {access_token,user}. All resources scoped by JWT sub -> user_id, soft-delete via deleted_at. Tax fiscal year default 6 Apr -> 5 Apr. When automating the New Invoice sheet in Playwright web preview, if a Pressable inside @gorhom/bottom-sheet does not respond to page.click, fall back to page.evaluate('document.querySelector(...).click()').",
+  "rca_of_issue": "Not a code bug — testing-only interaction: @gorhom/bottom-sheet's gesture handler on react-native-web intercepts synthetic pointerdown so Playwright's .click() sometimes has no effect on nested Pressable buttons. JS-level HTMLElement.click() bypasses the gesture handler and dispatches a real click that Pressable's web adapter honors."
+}

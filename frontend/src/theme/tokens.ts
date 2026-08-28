@@ -1,0 +1,63 @@
+// Design tokens derived from design_guidelines.json (PsyBooks — iOS-Native Clean)
+export const palette = {
+  light: {
+    surface: "#F9F9F8",
+    onSurface: "#1A1C1A",
+    surfaceSecondary: "#FFFFFF",
+    onSurfaceSecondary: "#1A1C1A",
+    surfaceTertiary: "#F0F0EE",
+    onSurfaceTertiary: "#4A4D4A",
+    surfaceInverse: "#1A1C1A",
+    onSurfaceInverse: "#F9F9F8",
+    brand: "#5F7161",
+    brandPrimary: "#5F7161",
+    onBrandPrimary: "#FFFFFF",
+    brandSecondary: "#D27D56",
+    onBrandSecondary: "#FFFFFF",
+    brandTertiary: "#EAECE8",
+    onBrandTertiary: "#3B473D",
+    success: "#4A7C59",
+    onSuccess: "#FFFFFF",
+    warning: "#D27D56",
+    onWarning: "#FFFFFF",
+    error: "#B95C50",
+    onError: "#FFFFFF",
+    info: "#7B8C7D",
+    border: "#E5E5E3",
+    borderStrong: "#C2C2BE",
+    divider: "#E5E5E3",
+  },
+  dark: {
+    surface: "#121312",
+    onSurface: "#F0F2F0",
+    surfaceSecondary: "#1E201E",
+    onSurfaceSecondary: "#F0F2F0",
+    surfaceTertiary: "#2C2E2C",
+    onSurfaceTertiary: "#B0B3B0",
+    surfaceInverse: "#F9F9F8",
+    onSurfaceInverse: "#121312",
+    brand: "#829C85",
+    brandPrimary: "#829C85",
+    onBrandPrimary: "#121312",
+    brandSecondary: "#E09775",
+    onBrandSecondary: "#121312",
+    brandTertiary: "#2C312D",
+    onBrandTertiary: "#AEC2B1",
+    success: "#63A377",
+    onSuccess: "#121312",
+    warning: "#E09775",
+    onWarning: "#121312",
+    error: "#D97668",
+    onError: "#121312",
+    info: "#95A697",
+    border: "#313331",
+    borderStrong: "#4A4D4A",
+    divider: "#313331",
+  },
+};
+
+export type ThemeColors = typeof palette.light;
+
+export const spacing = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, "2xl": 32, "3xl": 48 };
+export const radius = { sm: 6, md: 12, lg: 20, pill: 999 };
+export const fontSize = { sm: 12, base: 14, lg: 16, xl: 20, "2xl": 24, "3xl": 32, "4xl": 40 };

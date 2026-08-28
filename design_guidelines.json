@@ -1,0 +1,175 @@
+{
+  "app_name": "PsyBooks",
+  "personality": "1 iOS-Native Clean",
+  "personality_one_liner": "A calm, frictionless, and highly legible financial space designed for immediate clarity and zero cognitive overload.",
+  "color": {
+    "surface": "#F9F9F8",
+    "onSurface": "#1A1C1A",
+    "surfaceSecondary": "#FFFFFF",
+    "onSurfaceSecondary": "#1A1C1A",
+    "surfaceTertiary": "#F0F0EE",
+    "onSurfaceTertiary": "#4A4D4A",
+    "surfaceInverse": "#1A1C1A",
+    "onSurfaceInverse": "#F9F9F8",
+    "brand": "#5F7161",
+    "brandPrimary": "#5F7161",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#D27D56",
+    "onBrandSecondary": "#FFFFFF",
+    "brandTertiary": "#EAECE8",
+    "onBrandTertiary": "#3B473D",
+    "success": "#4A7C59",
+    "onSuccess": "#FFFFFF",
+    "warning": "#D27D56",
+    "onWarning": "#FFFFFF",
+    "error": "#B95C50",
+    "onError": "#FFFFFF",
+    "info": "#7B8C7D",
+    "onInfo": "#FFFFFF",
+    "border": "#E5E5E3",
+    "borderStrong": "#C2C2BE",
+    "divider": "#E5E5E3",
+    "dark": {
+      "surface": "#121312",
+      "onSurface": "#F0F2F0",
+      "surfaceSecondary": "#1E201E",
+      "onSurfaceSecondary": "#F0F2F0",
+      "surfaceTertiary": "#2C2E2C",
+      "onSurfaceTertiary": "#B0B3B0",
+      "surfaceInverse": "#F9F9F8",
+      "onSurfaceInverse": "#121312",
+      "brand": "#829C85",
+      "brandPrimary": "#829C85",
+      "onBrandPrimary": "#121312",
+      "brandSecondary": "#E09775",
+      "onBrandSecondary": "#121312",
+      "brandTertiary": "#2C312D",
+      "onBrandTertiary": "#AEC2B1",
+      "success": "#63A377",
+      "onSuccess": "#121312",
+      "warning": "#E09775",
+      "onWarning": "#121312",
+      "error": "#D97668",
+      "onError": "#121312",
+      "info": "#95A697",
+      "onInfo": "#121312",
+      "border": "#313331",
+      "borderStrong": "#4A4D4A",
+      "divider": "#313331"
+    }
+  },
+  "typography": {
+    "displayFontFamily": "Space Grotesk",
+    "textFontFamily": "Plus Jakarta Sans",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Generous vertical breathing room. Large touch targets (min 44pt, preferably 56pt for list rows). Intentional empty space to avoid sensory overload for ADHD users.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": "1",
+  "navigation": "bottom_tabs",
+  "icon_set": "Ionicons",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Bottom tab bar",
+      "Sticky headers over scrolling content",
+      "Bottom-sheet headers and drag handles"
+    ],
+    "dont's": [
+      "Every button",
+      "List rows",
+      "Dense forms"
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Dashboard",
+      "purpose": "Provide immediate financial clarity with zero jargon—showing 'Safe to Spend' and 'HMRC Tax Estimate'.",
+      "states": {
+        "loading": "Centered spinner in brandPrimary color.",
+        "empty": "N/A - Dashboard always shows zero states or initial setup cards.",
+        "error": "Readable message 'Could not load your summary' with a retry button."
+      },
+      "layout": "VStack layout. Top: Large primary widget 'Estimated Take Home' (Income - Expenses - Tax). Below: Horizontal scrolling or stacked customizable cards (HMRC Estimate for current fiscal year, Cash Flow overview). Bottom: 'Quick Add' floating action button or inline large buttons for Invoice/Expense. Use Space Grotesk for big numbers."
+    },
+    {
+      "name": "Invoices",
+      "purpose": "Manage billed work and generate PDFs.",
+      "states": {
+        "loading": "Skeleton list rows.",
+        "empty": "Illustration of a clean desk with text 'No invoices yet. Time to bill!' and a primary 'Create Invoice' CTA.",
+        "error": "Readable message with a retry button."
+      },
+      "layout": "Standard iOS list layout. Sticky header with total outstanding. List items have a minimum 56pt height, showing Client, Date, Amount, and Status badge (brandTertiary chip). Tapping opens a bottom sheet to view/share PDF."
+    },
+    {
+      "name": "Tax Canvas (HMRC Estimator)",
+      "purpose": "A dedicated, low-stress screen breaking down the HMRC Self Assessment calculation.",
+      "states": {
+        "loading": "Centered spinner.",
+        "empty": "N/A - calculates dynamically.",
+        "error": "Error message with 'Retry' CTA."
+      },
+      "layout": "A 'receipt-like' canvas view. Fiscal year selector at the top (Apr 6 - Apr 5). A clean top-to-bottom breakdown: Total Sales -> Less Allowable Expenses -> Taxable Profit -> Estimated Tax (Band + NI). Large export button at bottom (PDF / Copy text)."
+    }
+  ],
+  "images": {
+    "empty_invoices": {
+      "url": "https://images.unsplash.com/photo-1533090161767-e6ffed986c88?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1ODR8MHwxfHNlYXJjaHwxfHxjbGVhbiUyMGVtcHR5JTIwZGVzayUyMG1pbmltYWx8ZW58MHx8fHwxNzg3OTA3NzY1fDA&ixlib=rb-4.1.0&q=85",
+      "dark": "https://images.unsplash.com/photo-1519219788971-8d9797e0928e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1ODR8MHwxfHNlYXJjaHwzfHxjbGVhbiUyMGVtcHR5JTIwZGVzayUyMG1pbmltYWx8ZW58MHx8fHwxNzg3OTA3NzY1fDA&ixlib=rb-4.1.0&q=85",
+      "alt": "A clean, minimalist desk representing an organized workspace"
+    },
+    "all_caught_up": {
+      "url": "https://images.unsplash.com/photo-1503891617560-5b8c2e28cbf6?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NjZ8MHwxfHNlYXJjaHwxfHxjYWxtaW5nJTIwbWluaW1hbCUyMGFic3RyYWN0JTIwbmF0dXJlfGVufDB8fHx8MTc4NzkwNzc2NXww&ixlib=rb-4.1.0&q=85",
+      "dark": "https://images.unsplash.com/photo-1623100989250-27155460738b?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NjZ8MHwxfHNlYXJjaHwzfHxjYWxtaW5nJTIwbWluaW1hbCUyMGFic3RyYWN0JTIwbmF0dXJlfGVufDB8fHx8MTc4NzkwNzc2NXww&ixlib=rb-4.1.0&q=85",
+      "alt": "Calming ripples on water surface"
+    }
+  },
+  "haptics": {
+    "primary_button_press": "impactLight",
+    "tab_change": "selection",
+    "invoice_generated": "notificationSuccess",
+    "pull_to_refresh": "impactMedium",
+    "toggle_theme": "selection"
+  },
+  "instructions_to_main_agent": [
+    "ADHD & Accessibility focus: Keep cognitive load extremely low. Use plain English (e.g. 'Money In', not 'Accounts Receivable'). One primary CTA per screen.",
+    "Do not use pure white (#FFFFFF) against pure black (#000000). Use the provided soft charcoal and off-white theme tokens to reduce sensory overload.",
+    "Typography: Use Plus Jakarta Sans for body text to ensure maximum legibility. Use Space Grotesk exclusively for large financial numbers, metrics, and data readouts for clear tabular alignment.",
+    "Implement iOS-native patterns even on Android, such as smooth bottom sheets (@gorhom/bottom-sheet) for 'Add Expense' and 'Create Invoice' so the user doesn't lose context of where they are.",
+    "Tax Canvas layout: Keep it looking like a clear, linear receipt (Gross -> Expenses -> Net -> Tax -> Take Home) rather than a dense dashboard.",
+    "Include gradient scrims (bottom 30-40% dark fade) on any full-bleed images to ensure text readability."
+  ]
+}
