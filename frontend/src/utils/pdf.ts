@@ -21,7 +21,18 @@ type Business = {
   business_name?: string;
   email?: string;
   address?: string;
+  city?: string;
+  postcode?: string;
   utr?: string;
+  company_reg?: string;
+  vat_number?: string;
+  bank?: {
+    bank_name?: string;
+    account_name?: string;
+    sort_code?: string;
+    account_number?: string;
+    reference?: string;
+  };
 };
 
 type ClientInfo = { name?: string; email?: string; address?: string };
@@ -68,7 +79,10 @@ function invoiceHtml(inv: InvoiceForPdf, biz: Business, client: ClientInfo): str
       <div>
         <div class="brand">${escapeHtml(bizName)}</div>
         <div class="muted">${nl2br(escapeHtml(biz.address || ""))}</div>
+        ${(biz.city || biz.postcode) ? `<div class="muted">${escapeHtml([biz.city, biz.postcode].filter(Boolean).join(", "))}</div>` : ""}
         ${biz.email ? `<div class="muted">${escapeHtml(biz.email)}</div>` : ""}
+        ${biz.company_reg ? `<div class="muted">Company Reg: ${escapeHtml(biz.company_reg)}</div>` : ""}
+        ${biz.vat_number ? `<div class="muted">VAT No: ${escapeHtml(biz.vat_number)}</div>` : ""}
         ${biz.utr ? `<div class="muted">UTR: ${escapeHtml(biz.utr)}</div>` : ""}
       </div>
       <div style="text-align:right;">
@@ -105,8 +119,26 @@ function invoiceHtml(inv: InvoiceForPdf, biz: Business, client: ClientInfo): str
 
     ${inv.notes ? `<div class="note">${nl2br(escapeHtml(inv.notes))}</div>` : ""}
 
+    ${paymentBlock(biz, inv.number)}
+
     <div class="footer">Generated with ASETS</div>
   </body></html>`;
+}
+
+function paymentBlock(biz: Business, invoiceNumber: string): string {
+  const b = biz.bank || {};
+  if (!b.bank_name && !b.account_name && !b.account_number && !b.sort_code) return "";
+  const ref = b.reference || "Please use the invoice number";
+  const row = (label: string, val?: string) =>
+    val ? `<div style="display:flex;gap:8px;padding:3px 0;font-size:14px"><span style="min-width:120px;color:#6b6f6b">${label}</span><span style="font-weight:600">${escapeHtml(val)}</span></div>` : "";
+  return `<div style="margin-top:28px;padding:18px;border:1px solid #E5E5E3;border-radius:12px">
+    <div style="font-size:13px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#1A1C1A;margin-bottom:8px">Payment Details</div>
+    ${row("Bank", b.bank_name)}
+    ${row("Account Name", b.account_name)}
+    ${row("Sort Code", b.sort_code)}
+    ${row("Account No", b.account_number)}
+    ${row("Reference", ref)}
+  </div>`;
 }
 
 export async function shareInvoicePdf(inv: InvoiceForPdf, biz: Business, client: ClientInfo) {

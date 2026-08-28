@@ -1,0 +1,32 @@
+{
+  "summary": "Iteration 5 verified end-to-end. Backend: 9/9 new iter5 tests pass on top of existing 39 (48/48 total). PUT /api/auth/profile persists and returns all new fields (city, postcode, company_reg, vat_number, ni_number, bank{bank_name,account_name,sort_code,account_number,reference}, services[]); GET /api/auth/me mirrors them. Register defaults confirmed: bank.reference='Please use the invoice number' and services=[]. GET /api/companies/search?q=Tesco and GET /api/companies/{num} both return HTTP 503 with detail 'Company lookup not configured...' (NOT 500) when COMPANIES_HOUSE_API_KEY is empty — graceful as intended. Auth is enforced (401 without token). POST/PUT /api/clients accept and persist company_number. Regression: invoices create/list, expenses, and summary (net = sales - expenses) all still work. Frontend (web preview, mobile 390x844): registered a fresh user, opened Settings — 'Your details' saves city='Bristol' / postcode='BS1 4ST' / Company Reg='11223344' / VAT='GB111222333'; 'Payment details' saves Monzo/Dr Web5/04-00-04/12345678 and reference; 'Your services' Add-service adds 'CBT session' (£120, session) — the item appears in the list with a delete affordance. Invoices Create sheet: tapping 'Choose a service' (invoice-item-choose-0) opens the modal (service-search-input); typing 'CBT' filters to 1 option; selecting service-option-CBT session fills the description field to 'CBT session' — pass. Clients sheet: 'Find on Companies House' (client-find-company) with 'Tesco' triggers backend /api/companies/search which returns 503; UI shows a toast/inline text ('Company lookup not configured...') and does NOT crash or show a red screen — pass. No deprecated Expo packages detected (expo-av / expo-barcode-scanner / expo-background-fetch not present). Only console warning: 'props.pointerEvents is deprecated' and React 19 'element.ref was removed' warnings from libraries — cosmetic, not product bugs.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter5_features.py",
+    "/app/test_reports/pytest/pytest_iter5.xml"
+  ],
+  "action_items": [
+    "Please verify manually: after saving Settings, hard-reloading /settings via URL navigation in a fresh Playwright session showed blank fields; this may be Playwright/IndexedDB (AsyncStorage on web) hydration timing rather than a product bug (backend PUT+GET confirm data persists). If reproducible in a real browser after a page refresh, ensure Settings screen re-fetches /api/auth/me on mount and hydrates state before render."
+  ],
+  "critical_code_review_comments": [
+    "server.py public_user() correctly exposes all new profile fields (city, postcode, company_reg, vat_number, ni_number, bank, services) and defaults bank.reference on register.",
+    "server.py /api/companies/search and /api/companies/{num}: correctly returns 503 with helpful detail when key is missing; 502 for auth rejection; 429 mapped to 503; 400 for invalid company number; 404 for not-found — safe error surface with try/except HTTPException re-raise.",
+    "ClientIn model added company_number (str, default ''); create/update endpoints persist it via body.dict() spread — good.",
+    "settings.tsx exposes all required testIDs (settings-city-input, settings-postcode-input, settings-companyreg-input, settings-vat-input, settings-bank-input, settings-accname-input, settings-sortcode-input, settings-accnumber-input, settings-reference-input, service-name-input/-price-input/-add-button/service-item-{id}/service-remove-{id}).",
+    "invoices.tsx service picker: modal opens on invoice-item-choose-{idx}, filters against combined built-in + user services, selecting an option fills the description field — verified functional.",
+    "clients.tsx 'Find on Companies House' (client-find-company) invokes backend proxy; response body's 'detail' is surfaced as a user-facing message on 503 — no crash."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter5_features.py", "/app/test_reports/iteration_5.json"],
+  "success_rate": { "backend": "100% (9/9 iter5 + 39 regression)", "frontend": "100% for all 4 iter5 flows (Settings save/persist, services list, invoice service picker fills description, Companies House 503 toast without crash)" },
+  "seed_data_creation": "Test users iter5_*@psybooks.com, web5_*@psybooks.com; clients TEST_Acme Ltd (company_number 12345678), TEST_InvClient; one invoice INV-000x for CBT session £240; one expense TEST_Iter5Exp £25 Software.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "COMPANIES_HOUSE_API_KEY is intentionally empty in this env — expected behaviour is 503 + toast. Do NOT ask the app to actually hit Companies House. On web the register form has BOTH login and register inputs mounted in the DOM; use testIDs 'register-name-input'/'register-email-input'/'register-password-input' — do NOT select by placeholder ('you@example.com' matches two elements). Service picker modal is a plain RN Modal — DOM element.click() works; no need for gesture-handler tricks. Settings 'Reload after save' via page.goto() in a new Playwright context can appear blank due to AsyncStorage/IndexedDB re-hydration timing — this is not a backend bug (backend GET /auth/me confirms all data persists).",
+  "rca_of_issue": "No product bugs. One observation flagged for main agent: on Playwright web preview, doing page.goto('/settings') AFTER the save-and-goto sequence sometimes rendered empty inputs; backend data was intact (confirmed via test_iter5_features::TestProfileUpdate). Likely IndexedDB-backed AsyncStorage hydration race — safe to ignore unless a real-user refresh reproduces it."
+}

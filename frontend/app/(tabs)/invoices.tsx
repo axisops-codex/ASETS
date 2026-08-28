@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useRef, useState, useEffect } from "react";
-import { View, FlatList, Pressable, ActivityIndicator, Platform } from "react-native";
+import { View, FlatList, Pressable, ActivityIndicator, Platform, Modal, TextInput } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -14,6 +14,7 @@ import { AppSheet } from "@/src/components/AppSheet";
 import { AppText, Card, Field, PrimaryButton, Pill, EmptyState, IconButton, Divider } from "@/src/components/ui";
 import { gbp, prettyDate, toISODate } from "@/src/utils/format";
 import { shareInvoicePdf } from "@/src/utils/pdf";
+import { PSYCHOLOGY_SERVICES } from "@/src/data/services";
 
 type Item = { description: string; quantity: string; unit_price: string };
 
@@ -46,6 +47,8 @@ export default function Invoices() {
   const [status, setStatus] = useState<"draft" | "sent" | "paid">("sent");
   const [saving, setSaving] = useState(false);
   const [picker, setPicker] = useState<null | "issue" | "due">(null);
+  const [servicePickerFor, setServicePickerFor] = useState<number | null>(null);
+  const [serviceQuery, setServiceQuery] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -111,6 +114,24 @@ export default function Invoices() {
   };
 
   const total = items.reduce((s, it) => s + (parseFloat(it.quantity || "0") || 0) * (parseFloat(it.unit_price || "0") || 0), 0);
+
+  const userServices: any[] = (user as any)?.services || [];
+  const filteredServices = (() => {
+    const fromUser = userServices.map((s: any) => ({ name: s.name, price: s.price, unit: s.unit, saved: true }));
+    const names = new Set(fromUser.map((s: any) => (s.name || "").toLowerCase()));
+    const cat = PSYCHOLOGY_SERVICES.filter((s) => !names.has(s.name.toLowerCase())).map((s) => ({ ...s, saved: false }));
+    const list = [...fromUser, ...cat];
+    const q = serviceQuery.trim().toLowerCase();
+    return q ? list.filter((s) => s.name.toLowerCase().includes(q)) : list;
+  })();
+
+  const applyService = (svc: any) => {
+    const idx = servicePickerFor;
+    if (idx === null) return;
+    setItems((p) => p.map((x, i) => (i === idx ? { ...x, description: svc.name, unit_price: svc.price != null && svc.price !== "" ? String(svc.price) : x.unit_price } : x)));
+    setServicePickerFor(null);
+    setServiceQuery("");
+  };
 
   const save = async () => {
     if (!clientId) return toast.show("Choose a client", "error");
@@ -286,6 +307,14 @@ export default function Invoices() {
         <AppText variant="label">Line items</AppText>
         {items.map((it, idx) => (
           <View key={idx} style={{ gap: spacing.sm, backgroundColor: colors.surfaceSecondary, padding: spacing.md, borderRadius: 12, borderWidth: 1, borderColor: colors.border }}>
+            <Pressable
+              testID={`invoice-item-choose-${idx}`}
+              onPress={() => { setServiceQuery(""); setServicePickerFor(idx); }}
+              style={{ flexDirection: "row", alignItems: "center", gap: 6, alignSelf: "flex-start", backgroundColor: colors.brandTertiary, paddingHorizontal: spacing.md, paddingVertical: 6, borderRadius: 999 }}
+            >
+              <Ionicons name="list-outline" size={15} color={colors.onBrandTertiary} />
+              <AppText variant="caption" color={colors.onBrandTertiary} style={{ fontWeight: "700" }}>Choose a service</AppText>
+            </Pressable>
             <Field value={it.description} onChangeText={(t) => setItems((p) => p.map((x, i) => (i === idx ? { ...x, description: t } : x)))} placeholder="Description" testID={`invoice-item-desc-${idx}`} />
             <View style={{ flexDirection: "row", gap: spacing.sm }}>
               <View style={{ flex: 1 }}>
@@ -396,6 +425,49 @@ export default function Invoices() {
           </View>
         )}
       </AppSheet>
+
+      {/* Service picker */}
+      <Modal visible={servicePickerFor !== null} transparent animationType="slide" onRequestClose={() => setServicePickerFor(null)}>
+        <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)" }} onPress={() => setServicePickerFor(null)} testID="service-picker-backdrop" />
+        <View style={{ position: "absolute", left: 0, right: 0, bottom: 0, top: insets.top + 40, backgroundColor: colors.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: spacing.lg, gap: spacing.md }}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+            <AppText variant="heading">Choose a service</AppText>
+            <IconButton icon="close" onPress={() => setServicePickerFor(null)} testID="service-picker-close" />
+          </View>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm, backgroundColor: colors.surfaceTertiary, borderRadius: 12, paddingHorizontal: spacing.md, borderWidth: 1, borderColor: colors.border }}>
+            <Ionicons name="search" size={18} color={colors.onSurfaceTertiary} />
+            <TextInput
+              testID="service-search-input"
+              value={serviceQuery}
+              onChangeText={setServiceQuery}
+              placeholder="Search services..."
+              placeholderTextColor={colors.onSurfaceTertiary}
+              style={{ flex: 1, paddingVertical: spacing.md, color: colors.onSurface, fontSize: 16 }}
+              autoFocus
+            />
+          </View>
+          <FlatList
+            data={filteredServices}
+            keyExtractor={(s, i) => `${s.name}-${i}`}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: 40 }}
+            renderItem={({ item }) => (
+              <Pressable
+                testID={`service-option-${item.name}`}
+                onPress={() => applyService(item)}
+                style={({ pressed }) => [{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.divider }, pressed && { opacity: 0.6 }]}
+              >
+                <View style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+                  {item.saved && <Ionicons name="star" size={14} color={colors.brandSecondary} />}
+                  <AppText variant="body">{item.name}</AppText>
+                </View>
+                {item.price != null && item.price !== "" ? <AppText variant="body" color={colors.brand} style={{ fontWeight: "700" }}>{gbp(Number(item.price))}</AppText> : null}
+              </Pressable>
+            )}
+          />
+        </View>
+      </Modal>
     </View>
   );
 }

@@ -47,7 +47,13 @@ Mobile Mini ERP for self-employed UK psychologists (teleconsultations). Manage a
 - New logo (src/components/Logo.tsx, react-native-svg): Hinomaru red circle (#BC002D) + soft-blue ring (#8CAFD6) + white ascending check — Japanese, minimal, empowering ("done, moving forward").
 - Regenerated app assets (icon, adaptive-icon, splash, favicon) to match logo; splash/adaptive bg white; app.json name = ASETS.
 - New palette in tokens.ts: whites + soft blues (#3E6FA8 primary) + Hinomaru red (#BC002D accent for tax/attention). Light + dark.
-- Applied logo/wordmark on login, register, settings, and biometric lock/prompt; renamed brand strings and PDF branding to ASETS with new colors.
+## Iteration 5 — Invoice auto-fill, services & Companies House (2026-06-28)
+- Profile expanded: city, postcode, company_reg, vat_number, ni_number, bank{bank_name,account_name,sort_code,account_number,reference}, services[]. Returned by /auth/me + /auth/profile.
+- Settings: "Your details" (city/postcode/Company Reg/VAT/UTR), "Payment details" card (bank + reference default "Please use the invoice number"), "Your services" manager (name/price/unit session|hour|fixed).
+- Invoices: per-line "Choose a service" searchable picker (src/data/services.ts psychology catalogue + user's saved services) → fills description + price.
+- Clients: "Find on Companies House" → backend proxy GET /api/companies/search + /api/companies/{number} (HTTP Basic w/ COMPANIES_HOUSE_API_KEY) auto-fills name + registered address + company_number. Graceful 503 when key not configured. Client model stores company_number.
+- Invoice PDF: company header (Company Reg / VAT No / city+postcode) + PAYMENT DETAILS block from saved bank details.
+- Backend 48/48 pytest passing; frontend verified. NOTE: Companies House needs a free API key (COMPANIES_HOUSE_API_KEY in backend/.env) — company lookup returns a graceful "not configured" message until set.
 
 ## Tax logic
 2024/25 England rates. Personal allowance £12,570 (tapered >£100k), basic 20% / higher 40% / additional 45%; NI Class 4: 6% (£12,570–£50,270), 2% above. No VAT.

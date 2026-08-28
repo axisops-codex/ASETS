@@ -66,6 +66,8 @@ export const api = {
     request(`/summary?start=${start}&end=${end}&group=${group}`),
   exportCsv: (start: string, end: string) => request(`/export/csv?start=${start}&end=${end}`),
   scanReceipt: (image_base64: string) => request("/expenses/scan", { method: "POST", body: JSON.stringify({ image_base64 }) }),
+  companiesSearch: (q: string) => request(`/companies/search?q=${encodeURIComponent(q)}`),
+  companyProfile: (num: string) => request(`/companies/${encodeURIComponent(num)}`),
 };
 
 export async function receiptUrl(path: string): Promise<string> {

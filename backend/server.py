@@ -37,6 +37,9 @@ STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
 APP_NAME = "psybooks"
 _storage_key = None
 
+COMPANIES_HOUSE_API_KEY = os.environ.get("COMPANIES_HOUSE_API_KEY", "")
+COMPANIES_HOUSE_BASE_URL = os.environ.get("COMPANIES_HOUSE_BASE_URL", "https://api.company-information.service.gov.uk").rstrip("/")
+
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
@@ -109,7 +112,14 @@ def public_user(u: dict) -> dict:
         "name": u.get("name", ""),
         "business_name": u.get("business_name", ""),
         "address": u.get("address", ""),
+        "city": u.get("city", ""),
+        "postcode": u.get("postcode", ""),
         "utr": u.get("utr", ""),
+        "company_reg": u.get("company_reg", ""),
+        "vat_number": u.get("vat_number", ""),
+        "ni_number": u.get("ni_number", ""),
+        "bank": u.get("bank", {}),
+        "services": u.get("services", []),
         "settings": u.get("settings", {}),
     }
 
@@ -372,7 +382,14 @@ class ProfileUpdate(BaseModel):
     name: Optional[str] = None
     business_name: Optional[str] = None
     address: Optional[str] = None
+    city: Optional[str] = None
+    postcode: Optional[str] = None
     utr: Optional[str] = None
+    company_reg: Optional[str] = None
+    vat_number: Optional[str] = None
+    ni_number: Optional[str] = None
+    bank: Optional[dict] = None
+    services: Optional[list] = None
     settings: Optional[dict] = None
 
 
@@ -381,6 +398,7 @@ class ClientIn(BaseModel):
     contact_name: str = ""
     email: str = ""
     address: str = ""
+    company_number: str = ""
     notes: str = ""
     rate: Optional[float] = None
 
@@ -434,7 +452,14 @@ async def register(body: RegisterIn):
         "name": body.name.strip(),
         "business_name": "",
         "address": "",
+        "city": "",
+        "postcode": "",
         "utr": "",
+        "company_reg": "",
+        "vat_number": "",
+        "ni_number": "",
+        "bank": {"bank_name": "", "account_name": "", "sort_code": "", "account_number": "", "reference": "Please use the invoice number"},
+        "services": [],
         "settings": {"theme": "system", "cards": ["take_home", "hmrc", "cashflow", "recent"]},
         "created_at": now_iso(),
         "deleted_at": None,
@@ -496,6 +521,76 @@ async def update_client(client_id: str, body: ClientIn, user: dict = Depends(get
 async def delete_client(client_id: str, user: dict = Depends(get_current_user)):
     await db.clients.update_one({"id": client_id, "user_id": user["id"]}, {"$set": {"deleted_at": now_iso()}})
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Companies House lookup (auto-fill customer company details)
+# ---------------------------------------------------------------------------
+def _fmt_ch_address(a: Optional[dict]) -> str:
+    if not a:
+        return ""
+    parts = [a.get("premises"), a.get("address_line_1"), a.get("address_line_2"),
+             a.get("locality"), a.get("region"), a.get("postal_code"), a.get("country")]
+    return ", ".join([p for p in parts if p])
+
+
+@api_router.get("/companies/search")
+async def companies_search(q: str, user: dict = Depends(get_current_user)):
+    if not COMPANIES_HOUSE_API_KEY:
+        raise HTTPException(status_code=503, detail="Company lookup not configured. Add a Companies House API key in settings.")
+    if len(q.strip()) < 2:
+        return {"items": []}
+    try:
+        async with httpx.AsyncClient(base_url=COMPANIES_HOUSE_BASE_URL, timeout=12) as hc:
+            resp = await hc.get("/search/companies", params={"q": q, "items_per_page": 8, "start_index": 0}, auth=(COMPANIES_HOUSE_API_KEY, ""))
+        if resp.status_code == 401:
+            raise HTTPException(status_code=502, detail="Companies House key was rejected")
+        if resp.status_code == 429:
+            raise HTTPException(status_code=503, detail="Company lookup busy, try again shortly")
+        resp.raise_for_status()
+        data = resp.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"CH search error: {e}")
+        raise HTTPException(status_code=502, detail="Company lookup failed")
+    items = [
+        {
+            "company_number": it.get("company_number"),
+            "company_name": it.get("title"),
+            "company_status": it.get("company_status"),
+            "address": _fmt_ch_address(it.get("address")),
+        }
+        for it in data.get("items", [])
+        if it.get("company_number")
+    ]
+    return {"items": items}
+
+
+@api_router.get("/companies/{company_number}")
+async def companies_profile(company_number: str, user: dict = Depends(get_current_user)):
+    if not COMPANIES_HOUSE_API_KEY:
+        raise HTTPException(status_code=503, detail="Company lookup not configured")
+    if not company_number.isalnum() or len(company_number) > 12:
+        raise HTTPException(status_code=400, detail="Invalid company number")
+    try:
+        async with httpx.AsyncClient(base_url=COMPANIES_HOUSE_BASE_URL, timeout=12) as hc:
+            resp = await hc.get(f"/company/{company_number}", auth=(COMPANIES_HOUSE_API_KEY, ""))
+        if resp.status_code == 404:
+            raise HTTPException(status_code=404, detail="Company not found")
+        resp.raise_for_status()
+        data = resp.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"CH profile error: {e}")
+        raise HTTPException(status_code=502, detail="Company lookup failed")
+    return {
+        "company_number": data.get("company_number"),
+        "company_name": data.get("company_name"),
+        "company_status": data.get("company_status"),
+        "address": _fmt_ch_address(data.get("registered_office_address")),
+    }
 
 
 # ---------------------------------------------------------------------------

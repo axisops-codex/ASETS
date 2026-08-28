@@ -12,6 +12,7 @@ import { api } from "@/src/api/client";
 import { useToast } from "@/src/components/Toast";
 import { AppText, Card, Field, PrimaryButton, IconButton, Divider } from "@/src/components/ui";
 import { LogoLockup } from "@/src/components/Logo";
+import { gbp } from "@/src/utils/format";
 
 const CARD_OPTIONS = [
   { key: "take_home", label: "Estimated take home", icon: "wallet-outline" },
@@ -31,23 +32,73 @@ export default function Settings() {
   const [name, setName] = useState(user?.name || "");
   const [business, setBusiness] = useState(user?.business_name || "");
   const [address, setAddress] = useState(user?.address || "");
+  const [city, setCity] = useState((user as any)?.city || "");
+  const [postcode, setPostcode] = useState((user as any)?.postcode || "");
   const [utr, setUtr] = useState(user?.utr || "");
+  const [companyReg, setCompanyReg] = useState((user as any)?.company_reg || "");
+  const [vatNumber, setVatNumber] = useState((user as any)?.vat_number || "");
   const [savingProfile, setSavingProfile] = useState(false);
+
+  const bank0 = (user as any)?.bank || {};
+  const [bankName, setBankName] = useState(bank0.bank_name || "");
+  const [accName, setAccName] = useState(bank0.account_name || "");
+  const [sortCode, setSortCode] = useState(bank0.sort_code || "");
+  const [accNumber, setAccNumber] = useState(bank0.account_number || "");
+  const [reference, setReference] = useState(bank0.reference || "Please use the invoice number");
+  const [savingBank, setSavingBank] = useState(false);
+
+  const [services, setServices] = useState<any[]>((user as any)?.services || []);
+  const [svcName, setSvcName] = useState("");
+  const [svcPrice, setSvcPrice] = useState("");
+  const [svcUnit, setSvcUnit] = useState<"session" | "hour" | "fixed">("session");
 
   const activeCards: string[] = user?.settings?.cards || CARD_OPTIONS.map((c) => c.key);
 
   const saveProfile = async () => {
     setSavingProfile(true);
     try {
-      const updated = await api.updateProfile({ name, business_name: business, address, utr });
+      const updated = await api.updateProfile({ name, business_name: business, address, city, postcode, utr, company_reg: companyReg, vat_number: vatNumber });
       refreshUser(updated);
-      toast.show("Profile saved", "success");
+      toast.show("Details saved", "success");
     } catch (e: any) {
       toast.show(e.message || "Could not save", "error");
     } finally {
       setSavingProfile(false);
     }
   };
+
+  const saveBank = async () => {
+    setSavingBank(true);
+    try {
+      const updated = await api.updateProfile({ bank: { bank_name: bankName, account_name: accName, sort_code: sortCode, account_number: accNumber, reference } });
+      refreshUser(updated);
+      toast.show("Payment details saved", "success");
+    } catch (e: any) {
+      toast.show(e.message || "Could not save", "error");
+    } finally {
+      setSavingBank(false);
+    }
+  };
+
+  const persistServices = async (next: any[]) => {
+    setServices(next);
+    try {
+      const updated = await api.updateProfile({ services: next });
+      refreshUser(updated);
+    } catch (e: any) {
+      toast.show(e.message, "error");
+    }
+  };
+
+  const addService = () => {
+    if (!svcName.trim()) return toast.show("Enter a service name", "error");
+    const next = [...services, { id: Date.now().toString(), name: svcName.trim(), price: svcPrice ? parseFloat(svcPrice) : undefined, unit: svcUnit }];
+    persistServices(next);
+    setSvcName(""); setSvcPrice(""); setSvcUnit("session");
+    toast.show("Service added", "success");
+  };
+
+  const removeService = (id: string) => persistServices(services.filter((s) => s.id !== id));
 
   const toggleCard = async (key: string) => {
     Haptics.selectionAsync().catch(() => {});
@@ -169,9 +220,70 @@ export default function Settings() {
           <Card style={{ gap: spacing.md }}>
             <Field label="Your name" value={name} onChangeText={setName} placeholder="Dr. Sarah Jones" autoCapitalize="words" testID="settings-name-input" />
             <Field label="Practice / business name" value={business} onChangeText={setBusiness} placeholder="Sarah Jones Psychology" autoCapitalize="words" testID="settings-business-input" />
-            <Field label="Address" value={address} onChangeText={setAddress} placeholder="Your billing address" multiline testID="settings-address-input" />
+            <Field label="Address" value={address} onChangeText={setAddress} placeholder="Address line" multiline testID="settings-address-input" />
+            <View style={{ flexDirection: "row", gap: spacing.md }}>
+              <View style={{ flex: 1.4 }}><Field label="City" value={city} onChangeText={setCity} placeholder="London" autoCapitalize="words" testID="settings-city-input" /></View>
+              <View style={{ flex: 1 }}><Field label="Postcode" value={postcode} onChangeText={setPostcode} placeholder="SW1A 1AA" autoCapitalize="characters" testID="settings-postcode-input" /></View>
+            </View>
+            <View style={{ flexDirection: "row", gap: spacing.md }}>
+              <View style={{ flex: 1 }}><Field label="Company Reg (opt)" value={companyReg} onChangeText={setCompanyReg} placeholder="12345678" testID="settings-companyreg-input" /></View>
+              <View style={{ flex: 1 }}><Field label="VAT No (opt)" value={vatNumber} onChangeText={setVatNumber} placeholder="GB123456789" autoCapitalize="characters" testID="settings-vat-input" /></View>
+            </View>
             <Field label="UTR (optional)" value={utr} onChangeText={setUtr} placeholder="10-digit tax reference" keyboardType="numeric" testID="settings-utr-input" />
             <PrimaryButton title="Save details" onPress={saveProfile} loading={savingProfile} testID="settings-save-profile" />
+          </Card>
+        </View>
+
+        {/* Payment details */}
+        <View style={{ gap: spacing.sm }}>
+          <AppText variant="label">Payment details (shown on invoices)</AppText>
+          <Card style={{ gap: spacing.md }}>
+            <Field label="Bank" value={bankName} onChangeText={setBankName} placeholder="e.g. Barclays" autoCapitalize="words" testID="settings-bank-input" />
+            <Field label="Account name" value={accName} onChangeText={setAccName} placeholder="Account holder" autoCapitalize="words" testID="settings-accname-input" />
+            <View style={{ flexDirection: "row", gap: spacing.md }}>
+              <View style={{ flex: 1 }}><Field label="Sort code" value={sortCode} onChangeText={setSortCode} placeholder="20-00-00" testID="settings-sortcode-input" /></View>
+              <View style={{ flex: 1.2 }}><Field label="Account no." value={accNumber} onChangeText={setAccNumber} placeholder="12345678" keyboardType="numeric" testID="settings-accnumber-input" /></View>
+            </View>
+            <Field label="Reference" value={reference} onChangeText={setReference} placeholder="Please use the invoice number" testID="settings-reference-input" />
+            <PrimaryButton title="Save payment details" onPress={saveBank} loading={savingBank} variant="secondary" testID="settings-save-bank" />
+          </Card>
+        </View>
+
+        {/* Your services */}
+        <View style={{ gap: spacing.sm }}>
+          <AppText variant="label">Your services (dropdown on invoices)</AppText>
+          <Card style={{ gap: spacing.md }}>
+            {services.length === 0 ? (
+              <AppText variant="caption">Add the services you offer, with a default price. They'll appear in the invoice line dropdown.</AppText>
+            ) : (
+              services.map((s) => (
+                <View key={s.id} style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }} testID={`service-item-${s.id}`}>
+                  <View style={{ flex: 1 }}>
+                    <AppText variant="body" style={{ fontWeight: "600" }}>{s.name}</AppText>
+                    <AppText variant="caption">{s.price != null ? gbp(Number(s.price)) : "No default price"} · per {s.unit}</AppText>
+                  </View>
+                  <Pressable onPress={() => removeService(s.id)} hitSlop={8} testID={`service-remove-${s.id}`}>
+                    <Ionicons name="trash-outline" size={20} color={colors.error} />
+                  </Pressable>
+                </View>
+              ))
+            )}
+            <View style={{ height: 1, backgroundColor: colors.divider }} />
+            <Field label="Service name" value={svcName} onChangeText={setSvcName} placeholder="e.g. CBT session" testID="service-name-input" />
+            <View style={{ flexDirection: "row", gap: spacing.md, alignItems: "flex-end" }}>
+              <View style={{ flex: 1 }}><Field label="Price £ (opt)" value={svcPrice} onChangeText={setSvcPrice} placeholder="90" keyboardType="decimal-pad" testID="service-price-input" /></View>
+              <View style={{ flex: 1.4, gap: 4 }}>
+                <AppText variant="label">Unit</AppText>
+                <View style={{ flexDirection: "row", gap: 6 }}>
+                  {(["session", "hour", "fixed"] as const).map((u) => (
+                    <Pressable key={u} testID={`service-unit-${u}`} onPress={() => setSvcUnit(u)} style={{ flex: 1, alignItems: "center", paddingVertical: 10, borderRadius: 10, backgroundColor: svcUnit === u ? colors.brandTertiary : colors.surfaceTertiary, borderWidth: 1, borderColor: svcUnit === u ? colors.brand : colors.border }}>
+                      <AppText variant="caption" color={svcUnit === u ? colors.brand : colors.onSurfaceTertiary} style={{ fontWeight: "700" }}>{u}</AppText>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+            </View>
+            <PrimaryButton title="Add service" icon="add" onPress={addService} variant="outline" testID="service-add-button" />
           </Card>
         </View>
 
