@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Privacy Policy — ASETS</title>
+<link rel="stylesheet" href="/legal/_style.css">
+</head><body><div class="wrap">
+<header>
+<svg class="mark" viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="43" stroke="#8CAFD6" stroke-width="5" fill="none"/><circle cx="50" cy="50" r="34.5" fill="#BC002D"/><path d="M34 51 L47 64 L68 36" stroke="#fff" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+<div><h1>ASETS</h1><p class="sub">ADHD Self-Employed Taxes Support</p></div>
+</header>
+
+<h2>Privacy Policy</h2>
+<p class="sub">Last updated: 28 August 2026</p>
+
+<div class="card">
+<p><strong>The short version.</strong> ASETS stores the bookkeeping data you enter so it is there on your next visit. We do not sell it, we do not share it for advertising, and there are no analytics or tracking SDKs in the app. You can delete your account and everything in it from inside the app, at any time.</p>
+</div>
+
+<h2>1. Who we are</h2>
+<p>ASETS is provided by Axis B Solutions ("we", "us"), the data controller for the personal data described below. Contact: <a href="mailto:ops@axisbsolutions.com">ops@axisbsolutions.com</a>.</p>
+<!-- TODO before submission: confirm the registered legal entity name, postal address and (if applicable) ICO registration number, and add them here. -->
+
+<h2>2. What we collect and why</h2>
+<table>
+<tr><th>Data</th><th>Why</th><th>Legal basis (UK GDPR)</th></tr>
+<tr><td>Email address and password (stored only as a bcrypt hash)</td><td>To create your account and sign you in</td><td>Performance of a contract</td></tr>
+<tr><td>Your business profile — name, business name, address, city, postcode, UTR, company registration number, VAT number, National Insurance number, bank details for invoices</td><td>To fill in your invoices and estimate your tax</td><td>Performance of a contract</td></tr>
+<tr><td>Your clients — name, contact name, email, address, rate, company number</td><td>To address invoices and group income by client</td><td>Performance of a contract</td></tr>
+<tr><td>Invoices, expenses, categories, dates and amounts</td><td>The core bookkeeping function of the app</td><td>Performance of a contract</td></tr>
+<tr><td>Receipt photographs you choose to attach</td><td>To keep proof of purchase and read the amount, date and merchant from the receipt</td><td>Consent (you choose each photo)</td></tr>
+<tr><td><strong>Your National Insurance number</strong> — only if you connect ASETS to HMRC</td><td>HMRC identifies your tax records by NI number; it is required on every Making Tax Digital call</td><td>Legal obligation / performance of a contract</td></tr>
+<tr><td><strong>HMRC access and refresh tokens</strong> — only if you connect to HMRC</td><td>To submit your quarterly updates without asking you to sign in each time</td><td>Performance of a contract</td></tr>
+<tr><td><strong>Device details required by HMRC</strong> — device identifier, IP addresses, timezone, screen size, operating system version</td><td>HMRC requires these "fraud prevention headers" on every submission, by law</td><td>Legal obligation (Finance Act 2019 / SI 2019/360)</td></tr>
+</table>
+<p>We do <strong>not</strong> collect location, contacts, advertising identifiers, or usage analytics. The app contains no third-party advertising or tracking SDK.</p>
+
+<h2>3. Connecting to HMRC</h2>
+<p>Connecting ASETS to HMRC is optional, and nothing is sent to HMRC unless you connect and then confirm a submission.</p>
+<ul>
+<li><strong>You sign in on HMRC's own website.</strong> Your Government Gateway user ID and password are entered on HMRC's pages and never pass through ASETS.</li>
+<li><strong>What we store:</strong> an access token, a refresh token and your National Insurance number, all encrypted before they reach our database, plus the identifier of your self-employment business at HMRC.</li>
+<li><strong>What we send:</strong> the figures you have confirmed on screen — total income and total expenses by category for the period — together with the device details HMRC requires. We never send your client names, invoice descriptions or receipt images to HMRC.</li>
+<li><strong>Fraud prevention data.</strong> UK law obliges Making Tax Digital software to send HMRC information about the device making the submission: a device identifier we generate, your IP addresses, timezone, screen size and operating system. This is a legal requirement we cannot switch off, and it applies only when you use the HMRC features.</li>
+<li><strong>A record is kept.</strong> Every call we make to HMRC is logged with what was sent and what came back, so you and we can see exactly what was declared. You can view this in the app under Settings &rarr; HMRC.</li>
+<li><strong>Disconnecting</strong> (Settings &rarr; HMRC &rarr; Disconnect) deletes the stored tokens and NI number immediately.</li>
+</ul>
+<p>ASETS is not affiliated with HMRC. Submitting through ASETS does not change your legal responsibility for your tax return.</p>
+
+<h2>4. Face ID / fingerprint</h2>
+<p>If you switch on the app lock, authentication is performed entirely by iOS or Android on your device. ASETS receives only a yes/no result. Your biometric data never leaves your device and is never transmitted to us.</p>
+
+<h2>5. Who we share data with</h2>
+<p>We use a small number of processors, and only for the feature that needs them:</p>
+<ul>
+<li><strong>Hosting and database</strong> — our API and database provider store your account data at rest in the UK/EU.</li>
+<li><strong>Receipt reading (optional)</strong> — when you scan a receipt, that image is sent to our AI provider (Anthropic) purely to extract the amount, date, merchant and category. It is not used to train models.</li>
+<li><strong>Companies House</strong> — when you search for a client company, your search text is sent to the UK Companies House public API.</li>
+<li><strong>HM Revenue &amp; Customs</strong> — if you connect to HMRC and confirm a submission, the figures and the fraud prevention data described above are sent to HMRC. HMRC is a separate data controller for what it receives.</li>
+</ul>
+<p>We never sell personal data, and we never share it with advertisers or data brokers.</p>
+
+<h2>6. How long we keep it</h2>
+<p>For as long as your account exists. When you delete your account, your profile, clients, invoices, expenses, receipt images, HMRC tokens, NI number and the record of your HMRC submissions are permanently deleted from the live database immediately. Encrypted backups roll off within 30 days. HMRC keeps its own copy of anything you submitted to them, under its own retention rules.</p>
+
+<h2>7. Your rights</h2>
+<p>Under UK GDPR you may request access, correction, deletion, restriction, or a portable copy of your data, and you may object to processing. Most of this is available directly in the app: <em>Settings</em> lets you edit everything, export a CSV of your records, and delete your account. For anything else, email <a href="mailto:ops@axisbsolutions.com">ops@axisbsolutions.com</a> and we will respond within 30 days. You also have the right to complain to the <a href="https://ico.org.uk/make-a-complaint/">Information Commissioner's Office</a>.</p>
+
+<h2>8. Deleting your account</h2>
+<p>In the app: <em>Settings → Delete account</em>. If you no longer have the app installed, see <a href="/legal/delete-account">our account deletion page</a>.</p>
+
+<h2>9. Security</h2>
+<p>Traffic between the app and our API is encrypted with HTTPS. Passwords are hashed with bcrypt and never stored in readable form. Your session token is held in the device's secure keychain (iOS Keychain / Android Keystore). Receipt images can only be retrieved by the account that uploaded them.</p>
+<p>Your HMRC tokens and NI number are encrypted by the application before they are written, so they are unreadable in a database backup. The database enforces separation between accounts at row level: a query can only ever return rows belonging to the signed-in user, independently of the application code.</p>
+
+<h2>10. Children</h2>
+<p>ASETS is a business tool intended for people aged 18 and over. We do not knowingly collect data from children.</p>
+
+<h2>11. Estimates are not tax advice</h2>
+<p>The Self Assessment figures shown in the app are estimates produced from the data you enter, using published HMRC rates. They are not tax advice and are not a substitute for an accountant or for HMRC's own calculation.</p>
+
+<h2>12. Changes</h2>
+<p>If we change this policy we will update the date at the top and, for material changes, notify you in the app.</p>
+
+<footer>ASETS · <a href="/legal/terms">Terms of Use</a> · <a href="/legal/delete-account">Delete your account</a> · <a href="/legal/support">Support</a></footer>
+</div></body></html>

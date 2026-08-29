@@ -5,6 +5,7 @@ import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import BottomSheet from "@gorhom/bottom-sheet";
 import { useTheme } from "@/src/theme/ThemeProvider";
+import { useScreenBottomPadding } from "@/src/hooks/use-tab-bar-height";
 import { api } from "@/src/api/client";
 import { useToast } from "@/src/components/Toast";
 import { AppSheet } from "@/src/components/AppSheet";
@@ -13,6 +14,7 @@ import { AppText, Card, Field, PrimaryButton, EmptyState, IconButton } from "@/s
 export default function Clients() {
   const { colors, spacing } = useTheme();
   const insets = useSafeAreaInsets();
+  const bottomPadding = useScreenBottomPadding(40);
   const router = useRouter();
   const toast = useToast();
 
@@ -126,7 +128,7 @@ export default function Clients() {
         <FlatList
           data={clients}
           keyExtractor={(c) => c.id}
-          contentContainerStyle={{ padding: spacing.lg, gap: spacing.md, flexGrow: 1, paddingBottom: 40 }}
+          contentContainerStyle={{ padding: spacing.lg, gap: spacing.md, flexGrow: 1, paddingBottom: bottomPadding }}
           showsVerticalScrollIndicator={false}
           ListEmptyComponent={
             <View style={{ flex: 1, justifyContent: "center", minHeight: 400 }}>

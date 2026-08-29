@@ -1,0 +1,52 @@
+# Local production-like stack:  docker compose up --build
+# API on http://localhost:8080  (health: /api/health)
+#
+# Migrations run once against the fresh database:
+#   docker compose run --rm api python -m db.migrate
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: asets
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/asets
+      JWT_SECRET: ${JWT_SECRET:-dev-only-change-me-to-something-long}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      STORAGE_BACKEND: local
+      LOCAL_STORAGE_DIR: /data/receipts
+      LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      COMPANIES_HOUSE_API_KEY: ${COMPANIES_HOUSE_API_KEY:-}
+      HMRC_ENVIRONMENT: ${HMRC_ENVIRONMENT:-sandbox}
+      HMRC_CLIENT_ID: ${HMRC_CLIENT_ID:-}
+      HMRC_CLIENT_SECRET: ${HMRC_CLIENT_SECRET:-}
+      HMRC_REDIRECT_URI: ${HMRC_REDIRECT_URI:-http://localhost:8080/api/hmrc/callback}
+    volumes:
+      - receipts:/data
+    ports:
+      - "8080:8080"
+
+volumes:
+  pg_data:
+  receipts:

@@ -5,3 +5,13 @@ credentials.json
 *.pem
 *.key
 .credentials
+
+# ...but example/template files are meant to be committed
+!.env.example
+!*.env.example
+!.env.template
+backend/var/
+deploy/gcp.env
+__pycache__/
+*.pyc
+hmrc-test-user.json

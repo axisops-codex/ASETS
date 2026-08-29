@@ -1,0 +1,5 @@
+# Files never needed by an EAS build (keeps uploads small / secrets out)
+credentials/
+.env
+.env.*
+!.env.example

@@ -5,6 +5,7 @@ import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useTheme } from "@/src/theme/ThemeProvider";
+import { useTabBarHeight } from "@/src/hooks/use-tab-bar-height";
 import { useAuth } from "@/src/context/AuthContext";
 import { api } from "@/src/api/client";
 import { AppText, Card, IconButton } from "@/src/components/ui";
@@ -19,6 +20,7 @@ const PERIODS: { key: Period; label: string }[] = [
 
 export default function Dashboard() {
   const { colors, spacing, radius } = useTheme();
+  const tabBarHeight = useTabBarHeight();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuth();
@@ -86,7 +88,7 @@ export default function Dashboard() {
         </View>
       ) : (
         <ScrollView
-          contentContainerStyle={{ padding: spacing.lg, paddingTop: spacing.xs, paddingBottom: 140, gap: spacing.lg }}
+          contentContainerStyle={{ padding: spacing.lg, paddingTop: spacing.xs, paddingBottom: tabBarHeight + spacing.lg, gap: spacing.lg }}
           showsVerticalScrollIndicator={false}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.brand} />}
         >

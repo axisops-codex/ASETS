@@ -163,7 +163,7 @@ export function Field({
   placeholder?: string;
   keyboardType?: "default" | "email-address" | "numeric" | "decimal-pad";
   secureTextEntry?: boolean;
-  autoCapitalize?: "none" | "sentences" | "words";
+  autoCapitalize?: "none" | "sentences" | "words" | "characters";
   multiline?: boolean;
   testID?: string;
   onFocus?: () => void;

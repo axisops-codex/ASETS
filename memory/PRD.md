@@ -55,6 +55,57 @@ Mobile Mini ERP for self-employed UK psychologists (teleconsultations). Manage a
 - Invoice PDF: company header (Company Reg / VAT No / city+postcode) + PAYMENT DETAILS block from saved bank details.
 - Backend 48/48 pytest passing; frontend verified. NOTE: Companies House needs a free API key (COMPANIES_HOUSE_API_KEY in backend/.env) — company lookup returns a graceful "not configured" message until set.
 
+## Iteration 6 — Store launch readiness (2026-08-28)
+- Backend made self-hostable: storage backend (`STORAGE_BACKEND=local|emergent`, local disk volume), vision provider (`LLM_PROVIDER=anthropic|emergent`, Claude vision + JSON schema), email provider (`EMAIL_PROVIDER=resend|emergent`). Each degrades with a clear 503 when unconfigured. `requirements-prod.txt` drops `emergentintegrations`.
+- New endpoints: `GET /api/health` (db ping + which features are configured), `DELETE /api/auth/account` (hard delete of user + clients/invoices/expenses + receipts — required by both stores).
+- CORS now env-driven (`CORS_ORIGINS`); credentials only enabled when origins are pinned.
+- Legal pages served by the API at `/legal/{privacy,terms,delete-account,support}` (`backend/legal/`), so store listings always have live URLs.
+- Deploy configs: `backend/Dockerfile`, `backend/fly.toml`, `render.yaml`, `docker-compose.yml`.
+- Frontend: `app.json` rewritten for release (name ASETS, slug asets, scheme asets, bundle id `com.axisbsolutions.asets`, export-compliance flag, blockedPermissions, dark splash); `eas.json` with development/preview/production + submit profiles; Settings gained Legal & support links, in-app account deletion and a version footer; `src/config/app.ts` centralises backend/legal URLs.
+- Docs: `LAUNCH.md` runbook, `store/` (listing copy, Play data safety, Apple privacy labels, review notes, screenshots, checklist), `scripts/preflight.sh`, `scripts/seed_demo.py`.
+- Verified: expo-doctor 18/18, tsc clean, `expo prebuild` android manifest correct, API imports + serves legal pages with prod deps only.
+
+## Iteration 7 — PostgreSQL, HMRC MTD and Cloud Run (2026-08-28)
+- **Database rewritten from MongoDB to PostgreSQL 17** (`backend/db/`). Schema `asets`, numbered immutable SQL migrations (`db/migrations/0001_init`, `0002_hmrc`, `0003_grants`), runner `db/migrate.py`, deploy-time job `db/deploy.py` (creates the `asets_app` role + applies migrations, idempotent). Data access consolidated in `db/repo.py` / `db/hmrc_repo.py`; API wire shapes unchanged so the shipped app keeps working.
+- Money is `NUMERIC(12,2)`; `invoice_items.line_total` is a generated column and `invoices.total` is maintained by trigger. Check constraints (paid ⇒ paid_date, due ≥ issue, non-negative amounts), FK on expense categories, unique invoice number per user (advisory-lock allocation).
+- **Row-level security** on every tenant table with `FORCE`; `asets.current_user_id()` reads a transaction-local setting set by `pool.tenant()`. `users` and `hmrc_oauth_states` are excluded by design (login and the OAuth callback resolve identity themselves). Runtime role `asets_app` has DML only, no DDL, read-only on the category lookup.
+- **HMRC Making Tax Digital for Income Tax** (`backend/hmrc/`): OAuth2 connect/callback with single-use state, token refresh in its own transaction (HMRC rotates refresh tokens), Business Details v2.0, Obligations v3.0, Self Employment Business v5.0 cumulative quarterly update, Individual Calculations v8.0. Fraud prevention headers for MOBILE_APP_VIA_SERVER built from an `X-ASETS-Device` blob the app sends. Append-only audit trail in `hmrc_submissions` (trigger-enforced; purgeable only by account deletion). Tokens and NINO encrypted with Fernet (`crypto.py`). Final declaration deliberately out of scope.
+- Frontend: `app/hmrc.tsx` (connect → NINO → business → quarter preview → confirm → submit → history), `src/utils/device.ts` (device facts for the fraud headers, expo-device + expo-network), HMRC card in Settings.
+- **Cloud Run deployment**: `scripts/provision_gcp.sh` (Cloud SQL + Artifact Registry + GCS receipt bucket + service account + Secret Manager), `scripts/deploy_cloudrun.sh` (build → migration job → deploy → health check), `scripts/gen_secrets.py`, `scripts/provision_db.py`. Fly.io/Render configs removed.
+- Tests: 75 passing (`backend/tests/`) against a real throwaway PostgreSQL cluster booted per xdist worker — schema constraints, triggers, RLS isolation, audit immutability, full API contract, tenant isolation, reporting maths, and HMRC (mocked transport, asserting URLs, versions, fraud headers and payloads). Old live-server suites moved to `backend/tests/live/` behind `ASETS_LIVE_TESTS=1`.
+- Docs: `docs/DATABASE.md`, `docs/HMRC.md`, rewritten `LAUNCH.md`. Privacy policy and terms updated for NINO storage, HMRC submission and fraud-prevention data; store data-safety answers updated.
+
+## Iteration 8 — Free single-client deployment (2026-08-29)
+- Target changed from "app stores" to "one client, zero cost". Cloud SQL (~£20/mo) and the GCS receipt bucket were dropped.
+- **Database: Supabase free tier.** Currently the `asets` schema inside the existing `axis-builder` project (`aesdrxhezmksxntsnvam`, eu-west-1) — the org's 2-project free limit was already reached, so a dedicated project was not possible. Namespaced schema + own `asets_app` role, nothing else in that database is visible to it. Move path documented in LAUNCH.md §2 (user is creating a separate Supabase account).
+- **citext dependency removed** — case-insensitive email uniqueness is now a `UNIQUE INDEX ON lower(email)`, so the schema needs no extensions and runs on any managed Postgres.
+- **Receipt images moved into the database** (`asets.receipt_files`, migration 0004, RLS + 8 MB per-row cap + `receipt_storage_usage` view). `STORAGE_BACKEND=postgres` is now the default; storage dispatch became async. Removes the object store and makes account deletion cascade.
+- **Cloud Run live**: https://asets-api-7kd7b2l4kq-nw.a.run.app (europe-west2, min-instances=0, ~80 ms warm response). `scripts/provision_gcp.sh` now only creates Artifact Registry + service account + secrets, and grants Cloud Build `artifactregistry.writer` (its absence was the first deploy failure).
+- **Two production bugs found by deploying**: (1) `db.deploy` reset the `asets_app` password on every deploy, and Supabase's pooler caches credentials — a routine deploy left the API unable to authenticate. Rotation is now explicit (`DB_ROTATE_PASSWORD=1`). (2) A provider named in the environment without its API key reported as configured and failed mid-request; `_resolve_provider` now treats a missing key as disabled. Both covered by tests.
+- `pool.connect()` retries with backoff (scale-to-zero cold starts, pooler hiccups).
+- Docs consolidated: new short README.md, LAUNCH.md rewritten for the free path, `scripts/provision_db.py` deleted. 88 tests passing.
+
+## Iteration 9 — HMRC credentials wired (2026-08-29)
+- Sandbox credentials configured, stored in Secret Manager and deployed; `/api/health` reports `hmrc: sandbox`.
+- Verified against the real HMRC sandbox: credentials valid in sandbox and rejected in production (as expected — production needs HMRC approval). The four APIs ASETS calls are **subscribed** and the pinned versions accepted: Business Details 2.0, Obligations 3.0, Self Employment Business 5.0, Individual Calculations 8.0. Create Test User 1.0 is NOT subscribed (optional).
+- **Blocker found**: the redirect URI `https://asets-api-7kd7b2l4kq-nw.a.run.app/api/hmrc/callback` is not registered on the HMRC application — the sign-in step returns `redirect_uri is invalid`. Only fixable in the Developer Hub UI.
+- New `scripts/check_hmrc.py`: read-only diagnostic (credential validity + environment, per-API subscription probe using the 403 RESOURCE_FORBIDDEN vs 401 distinction, redirect-URI registration check). Wired into `scripts/preflight.sh`.
+- `.mcp.json` added for the new Supabase project (`bmxytncvoancaakryjkw`, aws-1-eu-west-1); it still needs interactive OAuth (`claude /mcp`) plus a session restart. Not a blocker — `scripts/switch_database.py` moves the database without MCP.
+
+## Iteration 9b — HMRC setup complete (2026-08-29)
+- Redirect URI registered; `scripts/check_hmrc.py` now passes end to end (credentials sandbox-valid, four APIs subscribed at pinned versions, redirect URI accepted).
+- Developer Hub "Customer usage information" fields point at the API's own pages: `/legal/privacy` and `/legal/terms`.
+- **18-month grant length handled**: a refresh that fails with `invalid_grant` is now `GrantExpired` (subclass of `NotConnected`) → HTTP 409 "Reconnect in Settings → HMRC", with the reason recorded on the connection and shown on the HMRC screen. An HMRC 5xx is explicitly *not* treated as an expired grant (stays 502). Three tests cover the distinction.
+- 91 tests passing.
+
+## Iteration 10 — fraud prevention headers validated (2026-08-29)
+- Subscriptions corrected on the Developer Hub: added Business Details 2.0, Obligations 3.0, Individual Calculations 8.0, Create Test User 1.0, Test Fraud Prevention Headers 1.0; removed VAT (MTD), Check a UK VAT number, BSAS and Trader Goods Profiles (HMRC withholds production credentials if you subscribe to APIs you do not use).
+- **Correction to iteration 9**: the earlier "subscribed" verdict for the four user-restricted APIs was unsound — HMRC returns 401 before checking subscription when given an application token, so only the application-restricted Create Test User probe was meaningful. `check_hmrc.py` no longer implies otherwise.
+- Sandbox test user created (`scripts/hmrc_test_user.py`, output git-ignored).
+- **Ran the real headers through HMRC's validator and fixed 3 errors**: `Gov-Vendor-Forwarded` was sending a hostname in `by=` (must be an IP, both halves); `Gov-Vendor-Public-IP` was never set. Cloud Run has no fixed egress IP, so the API now resolves its own address at startup and caches it — no paid static IP needed. `Gov-Client-Multi-Factor` is now reported when the biometric app lock is on (frontend `device.ts`). Result: INVALID_HEADERS (3 errors) → no errors, spec 3.3, 17 headers.
+- `Gov-Vendor-License-IDs` deliberately omitted — ASETS has no licence keys; HMRC's sanctioned route is omission plus explanation, wording drafted in docs/HMRC.md.
+- Header validation folded into `scripts/check_hmrc.py`.
+
 ## Tax logic
 2024/25 England rates. Personal allowance £12,570 (tapered >£100k), basic 20% / higher 40% / additional 45%; NI Class 4: 6% (£12,570–£50,270), 2% above. No VAT.
 

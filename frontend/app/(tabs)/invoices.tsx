@@ -7,6 +7,7 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import BottomSheet from "@gorhom/bottom-sheet";
 import * as Haptics from "expo-haptics";
 import { useTheme } from "@/src/theme/ThemeProvider";
+import { useTabBarHeight } from "@/src/hooks/use-tab-bar-height";
 import { useAuth } from "@/src/context/AuthContext";
 import { api } from "@/src/api/client";
 import { useToast } from "@/src/components/Toast";
@@ -22,6 +23,7 @@ const STATUS_TONE: any = { paid: "success", sent: "info", draft: "neutral" };
 
 export default function Invoices() {
   const { colors, spacing } = useTheme();
+  const tabBarHeight = useTabBarHeight();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const params = useLocalSearchParams<{ new?: string }>();
@@ -36,7 +38,6 @@ export default function Invoices() {
   const detailRef = useRef<BottomSheet>(null);
   const [selected, setSelected] = useState<any>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [emailing, setEmailing] = useState(false);
 
   // form
   const [clientId, setClientId] = useState("");
@@ -119,7 +120,8 @@ export default function Invoices() {
   const filteredServices = (() => {
     const fromUser = userServices.map((s: any) => ({ name: s.name, price: s.price, unit: s.unit, saved: true }));
     const names = new Set(fromUser.map((s: any) => (s.name || "").toLowerCase()));
-    const cat = PSYCHOLOGY_SERVICES.filter((s) => !names.has(s.name.toLowerCase())).map((s) => ({ ...s, saved: false }));
+    // keep `price` present in both branches so the picker list has one shape
+    const cat = PSYCHOLOGY_SERVICES.filter((s) => !names.has(s.name.toLowerCase())).map((s) => ({ name: s.name, price: undefined as number | undefined, unit: s.unit, saved: false }));
     const list = [...fromUser, ...cat];
     const q = serviceQuery.trim().toLowerCase();
     return q ? list.filter((s) => s.name.toLowerCase().includes(q)) : list;
@@ -161,20 +163,6 @@ export default function Invoices() {
       toast.show(e.message || "Could not save", "error");
     } finally {
       setSaving(false);
-    }
-  };
-
-  const doEmail = async () => {
-    if (!selected) return;
-    setEmailing(true);
-    try {
-      const r = await api.emailInvoice(selected.id);
-      toast.show(`Emailed to ${r.sent_to}`, "success");
-      detailRef.current?.close();
-    } catch (e: any) {
-      toast.show(e.message || "Could not send email", "error");
-    } finally {
-      setEmailing(false);
     }
   };
 
@@ -237,7 +225,7 @@ export default function Invoices() {
         <FlatList
           data={invoices}
           keyExtractor={(i) => i.id}
-          contentContainerStyle={{ padding: spacing.lg, paddingBottom: 140, gap: spacing.md, flexGrow: 1 }}
+          contentContainerStyle={{ padding: spacing.lg, paddingBottom: tabBarHeight + spacing.lg, gap: spacing.md, flexGrow: 1 }}
           showsVerticalScrollIndicator={false}
           ListEmptyComponent={
             <View style={{ flex: 1, justifyContent: "center", minHeight: 400 }}>
@@ -401,14 +389,11 @@ export default function Invoices() {
                 <AppText variant="heading" color={colors.brand}>{gbp(selected.total)}</AppText>
               </View>
               <AppText variant="caption" style={{ marginTop: 4 }}>
-                Issued {prettyDate(selected.issue_date)}{selected.paid_date ? ` · Paid ${prettyDate(selected.paid_date)}` : ""}{selected.emailed_at ? ` · Emailed ${prettyDate(selected.emailed_at)}` : ""} · No VAT (exempt)
+                Issued {prettyDate(selected.issue_date)}{selected.paid_date ? ` · Paid ${prettyDate(selected.paid_date)}` : ""} · No VAT (exempt)
               </AppText>
             </Card>
 
             <PrimaryButton title="Share PDF" icon="share-outline" onPress={doShare} testID="invoice-share-button" />
-            {clients.find((c) => c.id === selected.client_id)?.email ? (
-              <PrimaryButton title="Send by email" icon="mail-outline" variant="outline" onPress={doEmail} loading={emailing} testID="invoice-email-button" />
-            ) : null}
             <View style={{ flexDirection: "row", gap: spacing.md }}>
               <View style={{ flex: 1 }}>
                 <PrimaryButton title="Edit" icon="create-outline" variant="outline" onPress={() => openEdit(selected)} testID="invoice-edit-button" />
@@ -429,7 +414,7 @@ export default function Invoices() {
       {/* Service picker */}
       <Modal visible={servicePickerFor !== null} transparent animationType="slide" onRequestClose={() => setServicePickerFor(null)}>
         <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)" }} onPress={() => setServicePickerFor(null)} testID="service-picker-backdrop" />
-        <View style={{ position: "absolute", left: 0, right: 0, bottom: 0, top: insets.top + 40, backgroundColor: colors.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: spacing.lg, gap: spacing.md }}>
+        <View style={{ position: "absolute", left: 0, right: 0, bottom: 0, top: insets.top + 40, backgroundColor: colors.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: spacing.lg, paddingBottom: insets.bottom + spacing.lg, gap: spacing.md }}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
             <AppText variant="heading">Choose a service</AppText>
             <IconButton icon="close" onPress={() => setServicePickerFor(null)} testID="service-picker-close" />
@@ -451,7 +436,7 @@ export default function Invoices() {
             keyExtractor={(s, i) => `${s.name}-${i}`}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={{ paddingBottom: 40 }}
+            contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
             renderItem={({ item }) => (
               <Pressable
                 testID={`service-option-${item.name}`}

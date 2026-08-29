@@ -1,11 +1,13 @@
 import React, { useState } from "react";
-import { View, ScrollView, Pressable, Switch } from "react-native";
+import { View, ScrollView, Pressable, Switch, Linking } from "react-native";
+import * as WebBrowser from "expo-web-browser";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useTheme } from "@/src/theme/ThemeProvider";
+import { useScreenBottomPadding } from "@/src/hooks/use-tab-bar-height";
 import { useAuth } from "@/src/context/AuthContext";
 import { useBiometric } from "@/src/context/BiometricContext";
 import { api } from "@/src/api/client";
@@ -13,6 +15,7 @@ import { useToast } from "@/src/components/Toast";
 import { AppText, Card, Field, PrimaryButton, IconButton, Divider } from "@/src/components/ui";
 import { LogoLockup } from "@/src/components/Logo";
 import { gbp } from "@/src/utils/format";
+import { LEGAL, SUPPORT_EMAIL, VERSION_LABEL } from "@/src/config/app";
 
 const CARD_OPTIONS = [
   { key: "take_home", label: "Estimated take home", icon: "wallet-outline" },
@@ -24,6 +27,7 @@ const CARD_OPTIONS = [
 export default function Settings() {
   const { colors, spacing, mode, setMode, scheme } = useTheme();
   const insets = useSafeAreaInsets();
+  const bottomPadding = useScreenBottomPadding(40);
   const router = useRouter();
   const { user, logout, refreshUser } = useAuth();
   const { supported: bioSupported, enabled: bioEnabled, enable: bioEnable, disable: bioDisable } = useBiometric();
@@ -51,6 +55,28 @@ export default function Settings() {
   const [svcName, setSvcName] = useState("");
   const [svcPrice, setSvcPrice] = useState("");
   const [svcUnit, setSvcUnit] = useState<"session" | "hour" | "fixed">("session");
+
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const openLink = (url: string) => {
+    WebBrowser.openBrowserAsync(url).catch(() => Linking.openURL(url).catch(() => {}));
+  };
+
+  const deleteAccount = async () => {
+    setDeleting(true);
+    try {
+      await api.deleteAccount();
+      await logout();
+      router.replace("/(auth)/login");
+      toast.show("Your account and all its data were deleted.");
+    } catch (e: any) {
+      toast.show(e?.message || "Could not delete the account. Please try again.");
+    } finally {
+      setDeleting(false);
+      setConfirmDelete(false);
+    }
+  };
 
   const activeCards: string[] = user?.settings?.cards || CARD_OPTIONS.map((c) => c.key);
 
@@ -138,7 +164,7 @@ export default function Settings() {
         <AppText variant="title">Settings</AppText>
       </View>
 
-      <KeyboardAwareScrollView bottomOffset={24} contentContainerStyle={{ padding: spacing.lg, paddingBottom: 60, gap: spacing.lg }} keyboardShouldPersistTaps="handled">
+      <KeyboardAwareScrollView bottomOffset={24} contentContainerStyle={{ padding: spacing.lg, paddingBottom: bottomPadding, gap: spacing.lg }} keyboardShouldPersistTaps="handled">
         <View style={{ paddingTop: spacing.xs, paddingBottom: spacing.sm }}>
           <LogoLockup size={52} />
         </View>
@@ -287,11 +313,98 @@ export default function Settings() {
           </Card>
         </View>
 
+        {/* HMRC */}
+        <View style={{ gap: spacing.sm }}>
+          <AppText variant="label">HMRC</AppText>
+          <Card style={{ gap: spacing.md }}>
+            <AppText variant="caption">
+              Connect ASETS to HMRC to send your quarterly updates for Making Tax Digital, straight from the app.
+            </AppText>
+            <PrimaryButton title="HMRC filing" icon="cloud-upload-outline" variant="outline"
+                           onPress={() => router.push("/hmrc")} testID="settings-hmrc-button" />
+          </Card>
+        </View>
+
+        {/* Legal & support */}
+        <View style={{ gap: spacing.sm }}>
+          <AppText variant="label">Legal &amp; support</AppText>
+          <Card style={{ gap: spacing.md }}>
+            {[
+              { label: "Privacy Policy", icon: "shield-checkmark-outline", url: LEGAL.privacy, id: "privacy" },
+              { label: "Terms of Use", icon: "document-text-outline", url: LEGAL.terms, id: "terms" },
+              { label: "Help & FAQ", icon: "help-circle-outline", url: LEGAL.support, id: "support" },
+            ].map((row) => (
+              <Pressable
+                key={row.id}
+                testID={`settings-link-${row.id}`}
+                onPress={() => openLink(row.url)}
+                style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}
+              >
+                <Ionicons name={row.icon as any} size={20} color={colors.onSurfaceTertiary} />
+                <AppText variant="body" style={{ flex: 1 }}>{row.label}</AppText>
+                <Ionicons name="open-outline" size={16} color={colors.onSurfaceTertiary} />
+              </Pressable>
+            ))}
+            <View style={{ height: 1, backgroundColor: colors.divider }} />
+            <Pressable
+              testID="settings-contact-support"
+              onPress={() => Linking.openURL(`mailto:${SUPPORT_EMAIL}?subject=ASETS%20support`).catch(() => {})}
+              style={{ flexDirection: "row", alignItems: "center", gap: spacing.md }}
+            >
+              <Ionicons name="mail-outline" size={20} color={colors.onSurfaceTertiary} />
+              <AppText variant="body" style={{ flex: 1 }}>Contact support</AppText>
+              <AppText variant="caption">{SUPPORT_EMAIL}</AppText>
+            </Pressable>
+          </Card>
+        </View>
+
         <Divider />
         <View style={{ gap: spacing.xs }}>
           <AppText variant="caption">{user?.email}</AppText>
           <PrimaryButton title="Sign out" icon="log-out-outline" variant="outline" onPress={async () => { await logout(); router.replace("/(auth)/login"); }} testID="settings-logout-button" />
         </View>
+
+        {/* Danger zone — in-app account deletion is required by both app stores */}
+        <View style={{ gap: spacing.sm }}>
+          <AppText variant="label">Delete account</AppText>
+          <Card style={{ gap: spacing.md, borderColor: colors.error }}>
+            <AppText variant="caption">
+              Permanently deletes your profile, clients, invoices, expenses and receipt photos. This cannot be undone —
+              export your CSV from the Tax tab first if you want a copy.
+            </AppText>
+            {confirmDelete ? (
+              <View style={{ gap: spacing.sm }}>
+                <AppText variant="body" style={{ fontWeight: "700" }} color={colors.error}>
+                  Delete everything for {user?.email}?
+                </AppText>
+                <PrimaryButton
+                  title="Yes, delete my account"
+                  icon="trash-outline"
+                  variant="secondary"
+                  loading={deleting}
+                  onPress={deleteAccount}
+                  testID="settings-delete-confirm"
+                />
+                <PrimaryButton
+                  title="Cancel"
+                  variant="outline"
+                  onPress={() => setConfirmDelete(false)}
+                  testID="settings-delete-cancel"
+                />
+              </View>
+            ) : (
+              <PrimaryButton
+                title="Delete account"
+                icon="trash-outline"
+                variant="outline"
+                onPress={() => setConfirmDelete(true)}
+                testID="settings-delete-button"
+              />
+            )}
+          </Card>
+        </View>
+
+        <AppText variant="caption" style={{ textAlign: "center" }}>ASETS v{VERSION_LABEL}</AppText>
       </KeyboardAwareScrollView>
     </View>
   );

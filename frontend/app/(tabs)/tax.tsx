@@ -8,6 +8,7 @@ import BottomSheet from "@gorhom/bottom-sheet";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { useTheme } from "@/src/theme/ThemeProvider";
+import { useTabBarHeight } from "@/src/hooks/use-tab-bar-height";
 import { useAuth } from "@/src/context/AuthContext";
 import { api } from "@/src/api/client";
 import { useToast } from "@/src/components/Toast";
@@ -19,6 +20,7 @@ import { shareCsv } from "@/src/utils/csv";
 
 export default function TaxScreen() {
   const { colors, spacing, radius } = useTheme();
+  const tabBarHeight = useTabBarHeight();
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const toast = useToast();
@@ -123,7 +125,7 @@ export default function TaxScreen() {
           <ActivityIndicator color={colors.brand} size="large" />
         </View>
       ) : (
-        <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingTop: spacing.sm, paddingBottom: 140, gap: spacing.lg }} showsVerticalScrollIndicator={false}>
+        <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingTop: spacing.sm, paddingBottom: tabBarHeight + spacing.lg, gap: spacing.lg }} showsVerticalScrollIndicator={false}>
           {/* Receipt canvas */}
           <Card testID="tax-canvas" style={{ padding: spacing.xl }}>
             <View style={{ alignItems: "center", marginBottom: spacing.lg }}>

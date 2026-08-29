@@ -5,6 +5,7 @@ import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useTheme } from "@/src/theme/ThemeProvider";
+import { useScreenBottomPadding } from "@/src/hooks/use-tab-bar-height";
 import { api } from "@/src/api/client";
 import { useToast } from "@/src/components/Toast";
 import { AppText, Card, EmptyState, IconButton } from "@/src/components/ui";
@@ -13,6 +14,7 @@ import { gbp, prettyDate } from "@/src/utils/format";
 export default function Payments() {
   const { colors, spacing } = useTheme();
   const insets = useSafeAreaInsets();
+  const bottomPadding = useScreenBottomPadding(40);
   const router = useRouter();
   const toast = useToast();
 
@@ -72,7 +74,7 @@ export default function Payments() {
           <ActivityIndicator color={colors.brand} size="large" />
         </View>
       ) : (
-        <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 60, gap: spacing.lg }} showsVerticalScrollIndicator={false}>
+        <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: bottomPadding, gap: spacing.lg }} showsVerticalScrollIndicator={false}>
           <Card style={{ backgroundColor: colors.brandSecondary, borderColor: colors.brandSecondary }} testID="payments-total-owed">
             <AppText variant="label" color={colors.onBrandSecondary} style={{ opacity: 0.9 }}>Still owed to you</AppText>
             <AppText variant="mono" color={colors.onBrandSecondary}>{gbp(totalOwed)}</AppText>

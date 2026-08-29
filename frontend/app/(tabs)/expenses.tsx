@@ -9,32 +9,39 @@ import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import { Image } from "expo-image";
 import { useTheme } from "@/src/theme/ThemeProvider";
+import { useTabBarHeight } from "@/src/hooks/use-tab-bar-height";
 import { api, receiptUrl } from "@/src/api/client";
 import { useToast } from "@/src/components/Toast";
 import { AppSheet } from "@/src/components/AppSheet";
 import { AppText, Card, Field, PrimaryButton, EmptyState, IconButton } from "@/src/components/ui";
 import { gbp, prettyDate, prettyMonth, toISODate } from "@/src/utils/format";
 
-const CATEGORIES = [
-  { key: "Software", icon: "laptop-outline" },
-  { key: "Supervision", icon: "people-circle-outline" },
-  { key: "Training / CPD", icon: "school-outline" },
-  { key: "Insurance", icon: "shield-checkmark-outline" },
-  { key: "Professional fees", icon: "ribbon-outline" },
-  { key: "Office / Rent", icon: "business-outline" },
-  { key: "Equipment", icon: "hardware-chip-outline" },
-  { key: "Phone / Internet", icon: "wifi-outline" },
-  { key: "Travel", icon: "car-outline" },
-  { key: "Other", icon: "ellipsis-horizontal-circle-outline" },
-];
+type Category = {
+  code: string;
+  label: string;
+  icon: string;
+  hint: string;
+  hmrc_field: string;
+  disallowable: boolean;
+};
 
-const catIcon = (c: string) => CATEGORIES.find((x) => x.key === c)?.icon || "pricetag-outline";
+// Categories come from the API, which reads them from the database. They
+// used to be hardcoded here as well as in the backend and in the HMRC
+// mapping — three lists that drifted, which is how a client dinner ended
+// up claimed as an allowable expense.
+const FALLBACK: Category[] = [
+  { code: "Other", label: "Other", icon: "pricetag-outline", hint: "", hmrc_field: "otherExpenses", disallowable: false },
+];
 
 export default function Expenses() {
   const { colors, spacing } = useTheme();
+  const tabBarHeight = useTabBarHeight();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const params = useLocalSearchParams<{ new?: string }>();
+  const [cats, setCats] = useState<Category[]>(FALLBACK);
+  const catIcon = (code: string) =>
+    cats.find((c) => c.code === code)?.icon || "pricetag-outline";
   const toast = useToast();
 
   const [expenses, setExpenses] = useState<any[]>([]);
@@ -200,7 +207,7 @@ export default function Expenses() {
           sections={sections}
           keyExtractor={(i) => i.id}
           stickySectionHeadersEnabled={false}
-          contentContainerStyle={{ padding: spacing.lg, paddingBottom: 140, gap: spacing.sm, flexGrow: 1 }}
+          contentContainerStyle={{ padding: spacing.lg, paddingBottom: tabBarHeight + spacing.lg, gap: spacing.sm, flexGrow: 1 }}
           showsVerticalScrollIndicator={false}
           ListEmptyComponent={
             <View style={{ flex: 1, justifyContent: "center", minHeight: 400 }}>
@@ -274,17 +281,17 @@ export default function Expenses() {
 
         <AppText variant="label">Category</AppText>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: spacing.sm }}>
-          {CATEGORIES.map((c) => {
-            const active = category === c.key;
+          {cats.map((c) => {
+            const active = category === c.code;
             return (
               <Pressable
-                key={c.key}
-                testID={`expense-cat-${c.key}`}
-                onPress={() => setCategory(c.key)}
+                key={c.code}
+                testID={`expense-cat-${c.code}`}
+                onPress={() => setCategory(c.code)}
                 style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: 999, backgroundColor: active ? colors.brandPrimary : colors.surfaceTertiary, borderWidth: 1, borderColor: active ? colors.brandPrimary : colors.border }}
               >
                 <Ionicons name={c.icon as any} size={15} color={active ? colors.onBrandPrimary : colors.onSurfaceTertiary} />
-                <AppText variant="caption" color={active ? colors.onBrandPrimary : colors.onSurface} style={{ fontWeight: "600" }}>{c.key}</AppText>
+                <AppText variant="caption" color={active ? colors.onBrandPrimary : colors.onSurface} style={{ fontWeight: "600" }}>{c.label}</AppText>
               </Pressable>
             );
           })}

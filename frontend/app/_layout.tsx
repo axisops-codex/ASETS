@@ -38,6 +38,7 @@ function RootStack() {
       <Stack.Screen name="clients" options={{ presentation: "card" }} />
       <Stack.Screen name="payments" options={{ presentation: "card" }} />
       <Stack.Screen name="settings" options={{ presentation: "card" }} />
+      <Stack.Screen name="hmrc" options={{ presentation: "card" }} />
     </Stack>
   );
 }

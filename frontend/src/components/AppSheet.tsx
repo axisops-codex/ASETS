@@ -1,5 +1,6 @@
 import React, { forwardRef, useCallback, useMemo } from "react";
 import { View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import BottomSheet, { BottomSheetBackdrop, BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { useTheme } from "@/src/theme/ThemeProvider";
@@ -14,6 +15,9 @@ type Props = {
 
 export const AppSheet = forwardRef<BottomSheet, Props>(({ children, snapPoints, onClose }, ref) => {
   const { colors, radius, spacing } = useTheme();
+  // A sheet reaches the bottom edge, and Android draws under its
+  // navigation bar — without this the last button is untappable.
+  const insets = useSafeAreaInsets();
   const points = useMemo(() => snapPoints || ["90%"], [snapPoints]);
 
   const renderBackdrop = useCallback(
@@ -39,7 +43,7 @@ export const AppSheet = forwardRef<BottomSheet, Props>(({ children, snapPoints, 
       <KeyboardAwareScrollView
         ScrollViewComponent={BottomSheetScrollView as any}
         bottomOffset={24}
-        contentContainerStyle={{ padding: spacing.lg, paddingBottom: spacing["3xl"], gap: spacing.md }}
+        contentContainerStyle={{ padding: spacing.lg, paddingBottom: spacing["3xl"] + insets.bottom, gap: spacing.md }}
         keyboardShouldPersistTaps="handled"
       >
         {children}

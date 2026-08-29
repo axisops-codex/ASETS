@@ -1,5 +1,5 @@
 import React from "react";
-import { View, Pressable, Platform } from "react-native";
+import { View, Pressable } from "react-native";
 import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { BlurView } from "expo-blur";
@@ -7,6 +7,7 @@ import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "@/src/theme/ThemeProvider";
 import { AppText } from "@/src/components/ui";
+import { TAB_BAR_CONTENT_HEIGHT } from "@/src/hooks/use-tab-bar-height";
 
 const TABS = [
   { name: "index", label: "Home", icon: "home", activeIcon: "home" },
@@ -27,6 +28,7 @@ function CustomTabBar({ state, navigation }: any) {
         style={{
           flexDirection: "row",
           paddingBottom: insets.bottom > 0 ? insets.bottom : spacing.md,
+          minHeight: TAB_BAR_CONTENT_HEIGHT,
           paddingTop: spacing.sm,
           paddingHorizontal: spacing.sm,
           borderTopWidth: 1,

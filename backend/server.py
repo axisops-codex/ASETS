@@ -1,11 +1,11 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 from pathlib import Path
+from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Literal
 import uuid
@@ -13,23 +13,28 @@ from datetime import datetime, timezone, date, timedelta
 import jwt
 import bcrypt
 import re
-import ipaddress
 import httpx
+import asyncpg
 import base64
 import json
+import mimetypes
+import shutil
 import uuid as uuidlib
 import requests
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse, RedirectResponse
 from html import escape
-from html.parser import HTMLParser
-from urllib.parse import urlparse
+from urllib.parse import quote
+
+import crypto
+from db import pool, repo, hmrc_repo
+from hmrc import client as hmrc_client
+from hmrc import fraud, mapping as hmrc_mapping
+from hmrc import service as hmrc_service
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-EMAIL_BASE_URL = "https://integrations.emergentagent.com"
-EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY", "")
-EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "PsyBooks")
 
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
@@ -40,16 +45,75 @@ _storage_key = None
 COMPANIES_HOUSE_API_KEY = os.environ.get("COMPANIES_HOUSE_API_KEY", "")
 COMPANIES_HOUSE_BASE_URL = os.environ.get("COMPANIES_HOUSE_BASE_URL", "https://api.company-information.service.gov.uk").rstrip("/")
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+# --- Self-host / production configuration ----------------------------------
+# The app was built on the Emergent platform, whose managed proxy provides
+# object storage and the vision model. Outside that platform (App Store /
+# Play Store builds talk to our own API) both are swapped for standard
+# providers, selected by env var. Defaults keep the Emergent behaviour.
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+RECEIPT_MODEL = os.environ.get("RECEIPT_MODEL", "claude-opus-5")
+
+# postgres = images live in the database alongside everything else (the
+#            default: no object store to provision, and account deletion
+#            cascades for free)
+# local     = a mounted disk
+# emergent  = Emergent platform object storage
+STORAGE_BACKEND = (os.environ.get("STORAGE_BACKEND")
+                   or ("emergent" if EMERGENT_LLM_KEY else "postgres")).lower()
+LOCAL_STORAGE_DIR = Path(os.environ.get("LOCAL_STORAGE_DIR", str(ROOT_DIR / "var" / "receipts")))
+
+def _resolve_provider(requested: str, keys: dict) -> str:
+    """A provider is only 'configured' if its credential is actually there.
+
+    Naming a provider in the environment without its key would otherwise
+    make the feature look available and then fail mid-request; this way
+    it reports as disabled and the app says so up front.
+    """
+    name = (requested or "").lower()
+    if name and keys.get(name):
+        return name
+    if name:
+        return ""
+    return next((provider for provider, key in keys.items() if key), "")
+
+
+LLM_PROVIDER = _resolve_provider(
+    os.environ.get("LLM_PROVIDER", ""),
+    {"emergent": EMERGENT_LLM_KEY, "anthropic": ANTHROPIC_API_KEY})
+
+# Comma-separated list of allowed browser origins ("*" for any). Native app
+# builds send no Origin header, so a strict list here costs the app nothing.
+CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
+
+# PostgreSQL. The pool is opened on startup; DATABASE_URL is the only
+# thing the app needs to know about where the database lives (a Cloud SQL
+# socket path works here exactly like a host:port).
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = "HS256"
 TOKEN_DAYS = 30
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await pool.connect(DATABASE_URL or None,
+                       max_size=int(os.environ.get("DB_POOL_MAX", "10")))
+    try:
+        await run_in_threadpool(init_storage)
+        logging.getLogger("psybooks").info("Object storage initialised")
+    except Exception as e:
+        logging.getLogger("psybooks").error(
+            f"Storage init failed (will retry on first upload): {e}")
+    if hmrc_client.enabled():
+        # HMRC requires the server's own public IP on every submission.
+        found = await fraud.resolve_vendor_public_ip()
+        logging.getLogger("psybooks").info(
+            f"HMRC vendor public IP: {found or 'unresolved — header will be omitted'}")
+    yield
+    await pool.close()
+
+
+app = FastAPI(lifespan=lifespan)
 api_router = APIRouter(prefix="/api")
 security = HTTPBearer(auto_error=True)
 
@@ -93,15 +157,17 @@ def create_token(user_id: str) -> str:
 
 
 async def get_current_user(cred: HTTPAuthorizationCredentials = Depends(security)) -> dict:
-    token = cred.credentials
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+        payload = jwt.decode(cred.credentials, JWT_SECRET, algorithms=[JWT_ALG])
         user_id = payload.get("sub")
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired session")
-    user = await db.users.find_one({"id": user_id, "deleted_at": None}, {"_id": 0})
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    async with pool.tenant(user_id) as conn:
+        user = await repo.get_user(conn, user_id)
     if not user:
-        raise HTTPException(status_code=401, detail="User not found")
+        raise HTTPException(status_code=401, detail="Account no longer exists")
     return user
 
 
@@ -125,153 +191,16 @@ def public_user(u: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Email (Emergent managed Resend) — send invoice to client
-# ---------------------------------------------------------------------------
-_SHORTENERS = ("bit.ly", "tinyurl.com", "t.co", "is.gd", "cutt.ly", "goo.gl", "rebrand.ly")
-_CRED_ASK = ("reply with your password", "reply with the code", "send your password", "cvv",
-             "send us your password", "enter your password below", "confirm your card number",
-             "your full card number", "seed phrase", "recovery phrase", "verify your card",
-             "social security number", "confirm your bank details")
-_HOSTISH = re.compile(r"\b(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,})", re.I)
-
-
-def _host_ok(host: str) -> bool:
-    if not host or "xn--" in host:
-        return False
-    try:
-        ipaddress.ip_address(host)
-        return False
-    except ValueError:
-        pass
-    return not any(host == s or host.endswith("." + s) for s in _SHORTENERS)
-
-
-def _same_site(shown: str, real: str) -> bool:
-    return shown == real or real.endswith("." + shown) or shown.endswith("." + real)
-
-
-class _EmailScan(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.tags, self.urls, self.anchors = set(), [], []
-        self._href, self._text = None, []
-
-    def handle_starttag(self, tag, attrs):
-        self.tags.add(tag.lower())
-        self.urls += [v for k, v in attrs if k.lower() in ("href", "src") and v]
-        if tag.lower() == "a":
-            self._href = dict((k.lower(), v) for k, v in attrs).get("href")
-            self._text = []
-
-    def handle_data(self, data):
-        if self._href is not None:
-            self._text.append(data)
-
-    def handle_endtag(self, tag):
-        if tag.lower() == "a" and self._href is not None:
-            self.anchors.append((self._href, "".join(self._text)))
-            self._href, self._text = None, []
-
-
-def _assert_safe_email(subject: str, html: str) -> None:
-    scan = _EmailScan()
-    scan.feed(html)
-    if scan.tags & {"form", "input", "textarea", "select"}:
-        raise ValueError("No forms or input fields in email (G2)")
-    body = f"{subject}\n{html}".lower()
-    for p in _CRED_ASK:
-        if p in body:
-            raise ValueError(f"Email asks the recipient for credentials: {p!r} (G2)")
-    for url in scan.urls:
-        low = url.strip().lower()
-        if low.startswith(("mailto:", "tel:", "cid:", "#")):
-            continue
-        if not low.startswith("https://"):
-            raise ValueError(f"Email links/assets must be absolute https: {url!r} (G3)")
-        host = urlparse(low).hostname or ""
-        if not _host_ok(host) or urlparse(low).username is not None:
-            raise ValueError(f"Shortened, numeric-host or credential-bearing URL: {url!r} (G3)")
-    for href, text in scan.anchors:
-        real = urlparse(href.strip().lower()).hostname or ""
-        if not real:
-            continue
-        for m in _HOSTISH.finditer(text):
-            if not _same_site(m.group(1).lower(), real):
-                raise ValueError(f"Anchor text {m.group(1)!r} != real link host {real!r} (G3)")
-
-
-async def send_email(*, to: str, subject: str, html: str, reply_to: Optional[str] = None) -> Optional[str]:
-    _assert_safe_email(subject, html)
-    payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
-    if reply_to:
-        payload["contact_email"] = reply_to
-    try:
-        async with httpx.AsyncClient(timeout=30) as hc:
-            resp = await hc.post(
-                f"{EMAIL_BASE_URL}/api/v1/email/send",
-                headers={"X-Email-Key": EMAIL_KEY},
-                json=payload,
-            )
-        resp.raise_for_status()
-        return resp.json().get("id")
-    except httpx.HTTPStatusError as e:
-        logger.error(f"Email send failed: {e.response.status_code} {e.response.text}")
-        raise HTTPException(status_code=502, detail="Could not send the email")
-    except Exception as e:
-        logger.error(f"Email send error: {e}")
-        raise HTTPException(status_code=500, detail="Could not send the email")
-
-
-def _money(n: float) -> str:
-    return f"£{(n or 0):,.2f}"
-
-
-def build_invoice_email_html(inv: dict, biz: dict, client: dict) -> str:
-    biz_name = escape(biz.get("business_name") or biz.get("name") or "PsyBooks")
-    rows = ""
-    for it in inv.get("items", []):
-        amt = (it.get("quantity", 0) or 0) * (it.get("unit_price", 0) or 0)
-        rows += (
-            f'<tr><td style="padding:8px 4px;border-bottom:1px solid #eee;font-size:14px">{escape(str(it.get("description","")))}</td>'
-            f'<td style="padding:8px 4px;border-bottom:1px solid #eee;font-size:14px;text-align:right">{it.get("quantity",0)}</td>'
-            f'<td style="padding:8px 4px;border-bottom:1px solid #eee;font-size:14px;text-align:right">{_money(it.get("unit_price",0))}</td>'
-            f'<td style="padding:8px 4px;border-bottom:1px solid #eee;font-size:14px;text-align:right">{_money(amt)}</td></tr>'
-        )
-    notes = ""
-    if inv.get("notes"):
-        notes = (f'<p style="margin-top:20px;padding:14px;background:#F0F0EE;border-radius:10px;'
-                 f'font-size:13px;color:#4A4D4A">{escape(inv["notes"])}</p>')
-    return (
-        f'<table role="presentation" width="100%" style="max-width:560px;margin:0 auto;'
-        f'font-family:Arial,Helvetica,sans-serif;color:#1A1C1A"><tr><td style="padding:24px">'
-        f'<p style="font-size:20px;font-weight:bold;color:#5F7161;margin:0">{biz_name}</p>'
-        f'<h1 style="font-size:26px;margin:6px 0 2px">Invoice {escape(inv.get("number",""))}</h1>'
-        f'<p style="color:#888;font-size:13px;margin:0">Issued {escape(inv.get("issue_date",""))}'
-        + (f' · Due {escape(inv["due_date"])}' if inv.get("due_date") else "")
-        + f'</p>'
-        f'<p style="font-size:14px;margin:16px 0 4px"><strong>Billed to:</strong> {escape(client.get("name",""))}</p>'
-        f'<table role="presentation" width="100%" style="border-collapse:collapse;margin-top:12px">'
-        f'<tr><th style="text-align:left;font-size:11px;color:#9a9e9a;padding:8px 4px;border-bottom:2px solid #E5E5E3">DESCRIPTION</th>'
-        f'<th style="text-align:right;font-size:11px;color:#9a9e9a;padding:8px 4px;border-bottom:2px solid #E5E5E3">QTY</th>'
-        f'<th style="text-align:right;font-size:11px;color:#9a9e9a;padding:8px 4px;border-bottom:2px solid #E5E5E3">RATE</th>'
-        f'<th style="text-align:right;font-size:11px;color:#9a9e9a;padding:8px 4px;border-bottom:2px solid #E5E5E3">AMOUNT</th></tr>'
-        f'{rows}</table>'
-        f'<p style="text-align:right;font-size:22px;font-weight:bold;margin:18px 0 0">Total: {_money(inv.get("total",0))}</p>'
-        f'<p style="text-align:right;font-size:12px;color:#888;margin:2px 0">No VAT — exempt healthcare services.</p>'
-        f'{notes}'
-        f'<p style="font-size:12px;color:#888;margin-top:28px">Sent via PsyBooks on behalf of {biz_name}. '
-        f'Reply to this email to reach them. We never ask for your password or card details by email.</p>'
-        f'</td></tr></table>'
-    )
-
-
-
-
-# ---------------------------------------------------------------------------
 # Object storage (Emergent managed) + receipt AI extraction
 # ---------------------------------------------------------------------------
 def init_storage():
+    """Emergent object storage handshake. A no-op for the other backends."""
     global _storage_key
+    if STORAGE_BACKEND == "postgres":
+        return "postgres"
+    if STORAGE_BACKEND != "emergent":
+        LOCAL_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+        return "local"
     if _storage_key:
         return _storage_key
     resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_LLM_KEY}, timeout=30)
@@ -280,7 +209,7 @@ def init_storage():
     return _storage_key
 
 
-def put_object(path: str, data: bytes, content_type: str) -> dict:
+def _emergent_put_object(path: str, data: bytes, content_type: str) -> dict:
     global _storage_key
     key = init_storage()
     resp = requests.put(
@@ -302,40 +231,176 @@ def put_object(path: str, data: bytes, content_type: str) -> dict:
     return resp.json()
 
 
-def get_object(path: str) -> tuple:
+def _emergent_get_object(path: str) -> tuple:
     key = init_storage()
     resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
     resp.raise_for_status()
     return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
 
 
-EXPENSE_CATEGORIES = [
-    "Software", "Supervision", "Training / CPD", "Insurance", "Professional fees",
-    "Office / Rent", "Equipment", "Phone / Internet", "Travel", "Other",
-]
+def _local_file(path: str) -> Path:
+    """Resolve an object path inside LOCAL_STORAGE_DIR, refusing traversal."""
+    rel = Path(path)
+    if rel.is_absolute() or any(part in ("..", "") for part in rel.parts):
+        raise ValueError("Invalid object path")
+    target = (LOCAL_STORAGE_DIR / rel).resolve()
+    root = LOCAL_STORAGE_DIR.resolve()
+    if root not in target.parents:
+        raise ValueError("Invalid object path")
+    return target
 
 
-async def extract_receipt(image_b64: str) -> dict:
+def _local_put_object(path: str, data: bytes, content_type: str) -> dict:
+    target = _local_file(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    return {"path": path, "size": len(data)}
+
+
+def _local_get_object(path: str) -> tuple:
+    target = _local_file(path)
+    if not target.is_file():
+        raise FileNotFoundError(path)
+    ctype = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+    return target.read_bytes(), ctype
+
+
+def _local_delete_prefix(prefix: str) -> None:
+    """Best-effort removal of every object under a prefix (account deletion)."""
+    try:
+        folder = _local_file(prefix)
+    except ValueError:
+        return
+    if folder.is_dir():
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+async def put_object(path: str, data: bytes, content_type: str, user_id: str) -> dict:
+    """Store a receipt image. The tenant is explicit because the postgres
+    backend writes a row that row-level security has to accept."""
+    if STORAGE_BACKEND == "postgres":
+        async with pool.tenant(user_id) as conn:
+            return await repo.put_receipt(conn, path=path, user_id=user_id,
+                                          data=data, content_type=content_type)
+    if STORAGE_BACKEND == "emergent":
+        return await run_in_threadpool(_emergent_put_object, path, data, content_type)
+    return await run_in_threadpool(_local_put_object, path, data, content_type)
+
+
+async def get_object(path: str, user_id: str) -> tuple:
+    if STORAGE_BACKEND == "postgres":
+        async with pool.tenant(user_id) as conn:
+            found = await repo.get_receipt(conn, path)
+        if found is None:
+            raise FileNotFoundError(path)
+        return found
+    if STORAGE_BACKEND == "emergent":
+        return await run_in_threadpool(_emergent_get_object, path)
+    return await run_in_threadpool(_local_get_object, path)
+
+
+# Categories live in the database (asets.expense_categories) so the app,
+# the receipt reader and the HMRC submission cannot disagree about them.
+# Cached per instance; the list only changes by migration.
+_categories_cache: Optional[list] = None
+
+
+async def categories() -> list:
+    global _categories_cache
+    if _categories_cache is None:
+        async with pool.anonymous() as conn:
+            _categories_cache = await repo.expense_categories(conn)
+    return _categories_cache
+
+
+def receipt_schema(codes: list) -> dict:
+    return {
+        "type": "object",
+        "properties": {
+            "amount": {"type": "number"},
+            "currency": {"type": "string"},
+            "date": {"type": "string"},
+            "merchant": {"type": "string"},
+            "description": {"type": "string"},
+            "category": {"type": "string", "enum": codes},
+        },
+        "required": ["amount", "currency", "date", "merchant", "description", "category"],
+        "additionalProperties": False,
+    }
+
+
+
+
+def ocr_enabled() -> bool:
+    return LLM_PROVIDER in ("emergent", "anthropic")
+
+
+async def _vision_emergent(system: str, prompt: str, image_b64: str) -> str:
     from emergentintegrations.llm.chat import LlmChat, UserMessage, ImageContent
-    cats = ", ".join(EXPENSE_CATEGORIES)
+
+    chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"receipt-{uuidlib.uuid4()}",
+                   system_message=system).with_model("gemini", "gemini-3-flash-preview")
+    raw = await chat.send_message(
+        UserMessage(text=prompt, file_contents=[ImageContent(image_base64=image_b64)]))
+    return raw if isinstance(raw, str) else str(raw)
+
+
+async def _vision_anthropic(system: str, prompt: str, image_b64: str, schema: dict) -> str:
+    import anthropic
+
+    llm = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    resp = await llm.messages.create(
+        model=RECEIPT_MODEL,
+        max_tokens=2048,
+        system=system,
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": image_b64}},
+                {"type": "text", "text": prompt},
+            ],
+        }],
+        output_config={"effort": "low", "format": {"type": "json_schema", "schema": schema}},
+    )
+    return next((b.text for b in resp.content if b.type == "text"), "")
+
+
+async def _vision_extract(system: str, prompt: str, image_b64: str, schema: dict) -> str:
+    if LLM_PROVIDER == "emergent":
+        return await _vision_emergent(system, prompt, image_b64)
+    if LLM_PROVIDER == "anthropic":
+        return await _vision_anthropic(system, prompt, image_b64, schema)
+    raise RuntimeError("No vision provider configured (set EMERGENT_LLM_KEY or ANTHROPIC_API_KEY)")
+
+
+async def extract_receipt(image_b64: str, cats_list: Optional[list] = None) -> dict:
+    cats_list = cats_list if cats_list is not None else await categories()
+    codes = [c["code"] for c in cats_list]
+    # Give the model the hint text too — "meals only on overnight trips"
+    # is the difference between an allowable expense and a wrong return.
+    cats = "; ".join(f'{c["code"]} ({c["hint"]})' if c.get("hint") else c["code"]
+                     for c in cats_list)
     system = (
-        "You read UK business expense receipts for a self-employed psychologist. "
+        "You read UK business expense receipts for a self-employed practitioner. "
+        "UK till receipts never identify the buyer — there is no customer name, "
+        "VAT number or National Insurance number on them, so do not look for one. "
+        "Work only from what the receipt shows: the merchant, the date and the "
+        "amount actually paid. "
         "Return ONLY a compact JSON object, no prose, no code fences."
     )
     prompt = (
         "Extract the expense from this receipt image. If a QR code is present, use any text it encodes. "
-        "Return JSON with keys exactly: amount (number, total paid), currency (e.g. GBP), "
-        "date (YYYY-MM-DD, best guess if unclear), merchant (string), description (short, e.g. what was bought), "
+        "amount is the final total actually paid — the figure after any discount and "
+        "including service charge — not the sub-total and not a single line. "
+        "UK receipts write dates as DD/MM/YYYY: read them that way. "
+        "Return JSON with keys exactly: amount (number), currency (e.g. GBP), "
+        "date (YYYY-MM-DD), merchant (string), description (short, what was bought), "
         f"category (choose the single best fit from: {cats}). "
+        "A restaurant or pub bill is 'Client entertainment' unless it is clearly the "
+        "practitioner's own meal while away overnight, which is 'Overnight trips'. "
         "If a value is unknown use null for strings and 0 for amount. JSON only."
     )
-    chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"receipt-{uuidlib.uuid4()}", system_message=system).with_model(
-        "gemini", "gemini-3-flash-preview"
-    )
-    msg = UserMessage(text=prompt, file_contents=[ImageContent(image_base64=image_b64)])
-    raw = await chat.send_message(msg)
-    text = raw if isinstance(raw, str) else str(raw)
-    text = text.strip()
+    text = (await _vision_extract(system, prompt, image_b64, receipt_schema(codes))).strip()
     if text.startswith("```"):
         text = text.strip("`")
         if text.lower().startswith("json"):
@@ -348,7 +413,7 @@ async def extract_receipt(image_b64: str) -> dict:
         except Exception:
             data = {}
     cat = data.get("category")
-    if cat not in EXPENSE_CATEGORIES:
+    if cat not in codes:
         cat = "Other"
     try:
         amount = float(data.get("amount") or 0)
@@ -442,39 +507,25 @@ class ExpenseIn(BaseModel):
 @api_router.post("/auth/register")
 async def register(body: RegisterIn):
     email = body.email.strip().lower()
-    existing = await db.users.find_one({"email": email})
-    if existing:
-        raise HTTPException(status_code=409, detail="Email already registered")
-    user = {
-        "id": new_id(),
-        "email": email,
-        "password_hash": hash_password(body.password),
-        "name": body.name.strip(),
-        "business_name": "",
-        "address": "",
-        "city": "",
-        "postcode": "",
-        "utr": "",
-        "company_reg": "",
-        "vat_number": "",
-        "ni_number": "",
-        "bank": {"bank_name": "", "account_name": "", "sort_code": "", "account_number": "", "reference": "Please use the invoice number"},
-        "services": [],
-        "settings": {"theme": "system", "cards": ["take_home", "hmrc", "cashflow", "recent"]},
-        "created_at": now_iso(),
-        "deleted_at": None,
-    }
-    await db.users.insert_one(user)
+    async with pool.anonymous() as conn:
+        if await repo.find_by_email(conn, email):
+            raise HTTPException(status_code=409, detail="Email already registered")
+        user = await repo.create_user(conn, email=email,
+                                      password_hash=hash_password(body.password),
+                                      name=body.name.strip())
     return {"access_token": create_token(user["id"]), "user": public_user(user)}
 
 
 @api_router.post("/auth/login")
 async def login(body: LoginIn):
     email = body.email.strip().lower()
-    user = await db.users.find_one({"email": email, "deleted_at": None})
+    async with pool.anonymous() as conn:
+        user = await repo.find_by_email(conn, email)
     if not user or not verify_password(body.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Incorrect email or password")
-    return {"access_token": create_token(user["id"]), "user": public_user(user)}
+    async with pool.tenant(user["id"]) as conn:
+        full = await repo.get_user(conn, user["id"])
+    return {"access_token": create_token(full["id"]), "user": public_user(full)}
 
 
 @api_router.get("/auth/me")
@@ -485,10 +536,30 @@ async def me(user: dict = Depends(get_current_user)):
 @api_router.put("/auth/profile")
 async def update_profile(body: ProfileUpdate, user: dict = Depends(get_current_user)):
     updates = {k: v for k, v in body.dict().items() if v is not None}
-    if updates:
-        await db.users.update_one({"id": user["id"]}, {"$set": updates})
-    fresh = await db.users.find_one({"id": user["id"]}, {"_id": 0})
+    async with pool.tenant(user["id"]) as conn:
+        fresh = await repo.update_profile(conn, user["id"], updates)
     return public_user(fresh)
+
+
+@api_router.delete("/auth/account")
+async def delete_account(user: dict = Depends(get_current_user)):
+    """Permanent account deletion. Required by both stores for apps with sign-up.
+
+    Runs under pool.privileged() because the cascade reaches the HMRC
+    audit trail, which the database otherwise refuses to delete from.
+    """
+    uid = user["id"]
+    async with pool.privileged(uid) as conn:
+        await repo.delete_account(conn, uid)
+    # The postgres backend cascades with the user row; the disk backend
+    # has to be swept by hand.
+    if STORAGE_BACKEND == "local":
+        try:
+            await run_in_threadpool(_local_delete_prefix, f"{APP_NAME}/uploads/{uid}")
+        except Exception as e:  # never block deletion on storage cleanup
+            logger.error(f"Receipt cleanup failed for {uid}: {e}")
+    logger.info(f"Account deleted: {uid}")
+    return {"deleted": True}
 
 
 # ---------------------------------------------------------------------------
@@ -496,30 +567,29 @@ async def update_profile(body: ProfileUpdate, user: dict = Depends(get_current_u
 # ---------------------------------------------------------------------------
 @api_router.get("/clients")
 async def list_clients(user: dict = Depends(get_current_user)):
-    docs = await db.clients.find({"user_id": user["id"], "deleted_at": None}, {"_id": 0}).sort("name", 1).to_list(500)
-    return docs
+    async with pool.tenant(user["id"]) as conn:
+        return await repo.list_clients(conn)
 
 
 @api_router.post("/clients")
 async def create_client(body: ClientIn, user: dict = Depends(get_current_user)):
-    doc = {"id": new_id(), "user_id": user["id"], **body.dict(), "created_at": now_iso(), "deleted_at": None}
-    await db.clients.insert_one(doc)
-    doc.pop("_id", None)
-    return doc
+    async with pool.tenant(user["id"]) as conn:
+        return await repo.create_client(conn, user["id"], body.dict())
 
 
 @api_router.put("/clients/{client_id}")
 async def update_client(client_id: str, body: ClientIn, user: dict = Depends(get_current_user)):
-    res = await db.clients.update_one({"id": client_id, "user_id": user["id"]}, {"$set": body.dict()})
-    if res.matched_count == 0:
+    async with pool.tenant(user["id"]) as conn:
+        updated = await repo.update_client(conn, client_id, body.dict())
+    if updated is None:
         raise HTTPException(status_code=404, detail="Client not found")
-    doc = await db.clients.find_one({"id": client_id}, {"_id": 0})
-    return doc
+    return updated
 
 
 @api_router.delete("/clients/{client_id}")
 async def delete_client(client_id: str, user: dict = Depends(get_current_user)):
-    await db.clients.update_one({"id": client_id, "user_id": user["id"]}, {"$set": {"deleted_at": now_iso()}})
+    async with pool.tenant(user["id"]) as conn:
+        await repo.soft_delete_client(conn, client_id)
     return {"ok": True}
 
 
@@ -596,128 +666,83 @@ async def companies_profile(company_number: str, user: dict = Depends(get_curren
 # ---------------------------------------------------------------------------
 # Invoices
 # ---------------------------------------------------------------------------
-def invoice_total(items: List[dict]) -> float:
-    return round(sum((it.get("quantity", 0) or 0) * (it.get("unit_price", 0) or 0) for it in items), 2)
-
-
-async def enrich_invoice(inv: dict, user_id: str) -> dict:
-    client = await db.clients.find_one({"id": inv.get("client_id"), "user_id": user_id}, {"_id": 0, "name": 1})
-    inv["client_name"] = client["name"] if client else "Unknown client"
-    return inv
-
-
 @api_router.get("/invoices")
 async def list_invoices(user: dict = Depends(get_current_user)):
-    docs = await db.invoices.find({"user_id": user["id"], "deleted_at": None}, {"_id": 0}).sort("issue_date", -1).to_list(1000)
-    for d in docs:
-        await enrich_invoice(d, user["id"])
-    return docs
+    async with pool.tenant(user["id"]) as conn:
+        return await repo.list_invoices(conn)
 
 
 @api_router.post("/invoices")
 async def create_invoice(body: InvoiceIn, user: dict = Depends(get_current_user)):
-    count = await db.invoices.count_documents({"user_id": user["id"]})
-    items = [it.dict() for it in body.items]
-    doc = {
-        "id": new_id(),
-        "user_id": user["id"],
-        "number": f"INV-{count + 1:04d}",
-        "client_id": body.client_id,
-        "issue_date": body.issue_date,
-        "due_date": body.due_date,
-        "items": items,
-        "notes": body.notes,
-        "status": body.status,
-        "total": invoice_total(items),
-        "paid_date": today_iso_date() if body.status == "paid" else None,
-        "created_at": now_iso(),
-        "deleted_at": None,
-    }
-    await db.invoices.insert_one(doc)
-    doc.pop("_id", None)
-    await enrich_invoice(doc, user["id"])
-    return doc
+    payload = body.dict()
+    payload["items"] = [it if isinstance(it, dict) else it.dict() for it in payload["items"]]
+    async with pool.tenant(user["id"]) as conn:
+        try:
+            return await repo.create_invoice(conn, user["id"], payload)
+        except asyncpg.ForeignKeyViolationError:
+            raise HTTPException(status_code=404, detail="Client not found")
 
 
 @api_router.put("/invoices/{invoice_id}")
 async def update_invoice(invoice_id: str, body: InvoiceUpdate, user: dict = Depends(get_current_user)):
-    inv = await db.invoices.find_one({"id": invoice_id, "user_id": user["id"]})
-    if not inv:
-        raise HTTPException(status_code=404, detail="Invoice not found")
     updates = {k: v for k, v in body.dict().items() if v is not None}
     if "items" in updates:
         updates["items"] = [it if isinstance(it, dict) else it.dict() for it in updates["items"]]
-        updates["total"] = invoice_total(updates["items"])
-    if "status" in updates:
-        if updates["status"] == "paid":
-            updates["paid_date"] = body.paid_date or inv.get("paid_date") or today_iso_date()
-        else:
-            updates["paid_date"] = None
-    if updates:
-        await db.invoices.update_one({"id": invoice_id}, {"$set": updates})
-    doc = await db.invoices.find_one({"id": invoice_id}, {"_id": 0})
-    await enrich_invoice(doc, user["id"])
-    return doc
-
-
-@api_router.post("/invoices/{invoice_id}/email")
-async def email_invoice(invoice_id: str, user: dict = Depends(get_current_user)):
-    inv = await db.invoices.find_one({"id": invoice_id, "user_id": user["id"], "deleted_at": None}, {"_id": 0})
-    if not inv:
+    async with pool.tenant(user["id"]) as conn:
+        updated = await repo.update_invoice(conn, invoice_id, user["id"], updates)
+    if updated is None:
         raise HTTPException(status_code=404, detail="Invoice not found")
-    client = await db.clients.find_one({"id": inv.get("client_id"), "user_id": user["id"]}, {"_id": 0})
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    to = (client.get("email") or "").strip()
-    if not to:
-        raise HTTPException(status_code=400, detail="Add an email to this client first")
-    biz_name = user.get("business_name") or user.get("name") or "your therapist"
-    subject = f"Invoice {inv.get('number','')} from {biz_name}"
-    html = build_invoice_email_html(inv, user, client)
-    email_id = await send_email(to=to, subject=subject, html=html, reply_to=user.get("email"))
-    # Confirmation of sending: record when emailed, and auto-mark drafts as sent
-    updates = {"emailed_at": today_iso_date()}
-    if inv.get("status") == "draft":
-        updates["status"] = "sent"
-    await db.invoices.update_one({"id": invoice_id}, {"$set": updates})
-    return {"ok": True, "email_id": email_id, "sent_to": to, "emailed_at": updates["emailed_at"], "status": updates.get("status", inv.get("status"))}
+    return updated
 
 
 @api_router.delete("/invoices/{invoice_id}")
 async def delete_invoice(invoice_id: str, user: dict = Depends(get_current_user)):
-    await db.invoices.update_one({"id": invoice_id, "user_id": user["id"]}, {"$set": {"deleted_at": now_iso()}})
+    async with pool.tenant(user["id"]) as conn:
+        await repo.soft_delete_invoice(conn, invoice_id)
     return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
 # Expenses
 # ---------------------------------------------------------------------------
+@api_router.get("/expense-categories")
+async def list_expense_categories(user: dict = Depends(get_current_user)):
+    """What the picker shows. Served from the database so the app, the
+    receipt reader and the HMRC submission cannot drift apart."""
+    return {"categories": await categories()}
+
+
 @api_router.get("/expenses")
 async def list_expenses(user: dict = Depends(get_current_user)):
-    docs = await db.expenses.find({"user_id": user["id"], "deleted_at": None}, {"_id": 0}).sort("date", -1).to_list(1000)
-    return docs
+    async with pool.tenant(user["id"]) as conn:
+        return await repo.list_expenses(conn)
 
 
 @api_router.post("/expenses")
 async def create_expense(body: ExpenseIn, user: dict = Depends(get_current_user)):
-    doc = {"id": new_id(), "user_id": user["id"], **body.dict(), "created_at": now_iso(), "deleted_at": None}
-    await db.expenses.insert_one(doc)
-    doc.pop("_id", None)
-    return doc
+    async with pool.tenant(user["id"]) as conn:
+        try:
+            return await repo.create_expense(conn, user["id"], body.dict())
+        except asyncpg.ForeignKeyViolationError:
+            raise HTTPException(status_code=400, detail=f"Unknown category: {body.category}")
 
 
 @api_router.put("/expenses/{expense_id}")
 async def update_expense(expense_id: str, body: ExpenseIn, user: dict = Depends(get_current_user)):
-    res = await db.expenses.update_one({"id": expense_id, "user_id": user["id"]}, {"$set": body.dict()})
-    if res.matched_count == 0:
+    async with pool.tenant(user["id"]) as conn:
+        try:
+            updated = await repo.update_expense(conn, expense_id, body.dict())
+        except asyncpg.ForeignKeyViolationError:
+            raise HTTPException(status_code=400, detail=f"Unknown category: {body.category}")
+    if updated is None:
         raise HTTPException(status_code=404, detail="Expense not found")
-    doc = await db.expenses.find_one({"id": expense_id}, {"_id": 0})
-    return doc
+    return updated
 
 
 @api_router.delete("/expenses/{expense_id}")
 async def delete_expense(expense_id: str, user: dict = Depends(get_current_user)):
-    await db.expenses.update_one({"id": expense_id, "user_id": user["id"]}, {"$set": {"deleted_at": now_iso()}})
+    async with pool.tenant(user["id"]) as conn:
+        await repo.soft_delete_expense(conn, expense_id)
     return {"ok": True}
 
 
@@ -736,6 +761,8 @@ def _verify_receipt_owner(path: str, user_id: str) -> bool:
 
 @api_router.post("/expenses/scan")
 async def scan_receipt(body: ScanIn, user: dict = Depends(get_current_user)):
+    if not ocr_enabled():
+        raise HTTPException(status_code=503, detail="Receipt scanning isn't set up on this server yet. Add the expense manually.")
     b64 = body.image_base64
     if "," in b64[:64]:
         b64 = b64.split(",", 1)[1]
@@ -748,7 +775,7 @@ async def scan_receipt(body: ScanIn, user: dict = Depends(get_current_user)):
     receipt_path = None
     try:
         path = f"{APP_NAME}/uploads/{user['id']}/{uuidlib.uuid4().hex}.jpg"
-        await run_in_threadpool(put_object, path, raw_bytes, "image/jpeg")
+        await put_object(path, raw_bytes, "image/jpeg", user["id"])
         receipt_path = path
     except Exception as e:
         logger.error(f"Receipt upload failed: {e}")
@@ -777,7 +804,7 @@ async def get_file(path: str, token: Optional[str] = None, cred: Optional[HTTPAu
     if not _verify_receipt_owner(path, user_id):
         raise HTTPException(status_code=403, detail="Not allowed")
     try:
-        content, ctype = await run_in_threadpool(get_object, path)
+        content, ctype = await get_object(path, user_id)
     except Exception:
         raise HTTPException(status_code=404, detail="File not found")
     from fastapi import Response
@@ -869,8 +896,9 @@ def in_range(d: Optional[str], start: str, end: str) -> bool:
 
 @api_router.get("/summary")
 async def summary(start: str, end: str, group: str = "month", user: dict = Depends(get_current_user)):
-    invoices = await db.invoices.find({"user_id": user["id"], "deleted_at": None}, {"_id": 0}).to_list(2000)
-    expenses = await db.expenses.find({"user_id": user["id"], "deleted_at": None}, {"_id": 0}).to_list(2000)
+    async with pool.tenant(user["id"]) as conn:
+        invoices = await repo.list_invoices(conn)
+        expenses = await repo.list_expenses(conn)
 
     inv_in = [i for i in invoices if in_range(i.get("issue_date"), start, end)]
     exp_in = [e for e in expenses if in_range(e.get("date"), start, end)]
@@ -936,10 +964,10 @@ async def summary(start: str, end: str, group: str = "month", user: dict = Depen
 
 @api_router.get("/export/csv")
 async def export_csv(start: str, end: str, user: dict = Depends(get_current_user)):
-    invoices = await db.invoices.find({"user_id": user["id"], "deleted_at": None}, {"_id": 0}).to_list(2000)
-    expenses = await db.expenses.find({"user_id": user["id"], "deleted_at": None}, {"_id": 0}).to_list(2000)
-    clients = await db.clients.find({"user_id": user["id"]}, {"_id": 0, "id": 1, "name": 1}).to_list(500)
-    cmap = {c["id"]: c.get("name", "") for c in clients}
+    async with pool.tenant(user["id"]) as conn:
+        invoices = await repo.list_invoices(conn)
+        expenses = await repo.list_expenses(conn)
+        cmap = await repo.client_name_map(conn)
     inv_in = sorted([i for i in invoices if in_range(i.get("issue_date"), start, end)], key=lambda x: x.get("issue_date", ""))
     exp_in = sorted([e for e in expenses if in_range(e.get("date"), start, end)], key=lambda x: x.get("date", ""))
 
@@ -977,31 +1005,381 @@ async def export_csv(start: str, end: str, user: dict = Depends(get_current_user
     return {"csv": csv, "filename": f"psybooks_{start}_to_{end}.csv"}
 
 
+# ---------------------------------------------------------------------------
+# HMRC — Making Tax Digital for Income Tax
+#
+# The app talks to HMRC through this API (connection method
+# MOBILE_APP_VIA_SERVER), so every call carries fraud prevention headers
+# assembled from what the phone reports plus what only the server knows.
+# ---------------------------------------------------------------------------
+# HMRC documents the format as AA999999A and validates it authoritatively
+# at their end. Encoding the full "impossible prefix" rules here would
+# reject HMRC's own sandbox test users, so this only catches typos.
+NINO_RE = re.compile(r"^[A-Z]{2}[0-9]{6}[A-D]$")
+
+APP_RETURN_URL = os.environ.get("HMRC_APP_RETURN_URL", "asets://hmrc")
+
+
+class NinoIn(BaseModel):
+    nino: str
+
+
+class BusinessIn(BaseModel):
+    business_id: str
+
+
+class SubmitQuarterIn(BaseModel):
+    tax_year: str
+    quarter: int = Field(ge=1, le=4)
+    confirm: bool = False
+
+
+def require_hmrc() -> None:
+    if not hmrc_client.enabled():
+        raise HTTPException(status_code=503,
+                            detail="HMRC filing isn't set up on this server yet.")
+    if not crypto.available():
+        raise HTTPException(status_code=503,
+                            detail="HMRC filing is unavailable: encryption key not configured.")
+
+
+def device_headers(request: Request, user: dict) -> dict:
+    """Fraud prevention headers for this request."""
+    forwarded = request.headers.get("x-forwarded-for", "")
+    client_ip = forwarded.split(",")[0].strip() if forwarded else (
+        request.client.host if request.client else "")
+    device = fraud.decode_device_header(request.headers.get("x-asets-device"))
+    return fraud.build_headers(
+        device,
+        user_id=user["id"],
+        client_ip=client_ip,
+        client_port=request.client.port if request.client else None,
+    )
+
+
+def _hmrc_failure(status_code: int, payload) -> HTTPException:
+    """HMRC error bodies are {code, message}; surface the message, not a 500."""
+    message = "HMRC rejected the request."
+    if isinstance(payload, dict):
+        message = payload.get("message") or payload.get("error_description") or message
+        if isinstance(payload.get("errors"), list) and payload["errors"]:
+            first = payload["errors"][0]
+            message = f"{message} ({first.get('code')}: {first.get('message')})"
+    return HTTPException(status_code=502 if status_code >= 500 else 400, detail=message)
+
+
+@api_router.get("/hmrc/status")
+async def hmrc_status(request: Request, user: dict = Depends(get_current_user)):
+    configured = hmrc_client.enabled() and crypto.available()
+    if not configured:
+        return {"configured": False, "connected": False}
+    async with pool.tenant(user["id"]) as conn:
+        connection = await hmrc_repo.get_connection(conn, user["id"])
+    headers = device_headers(request, user)
+    today = date.today()
+    tax_year = hmrc_mapping.tax_year_for(today)
+    return {
+        "configured": True,
+        "connected": connection is not None,
+        "environment": hmrc_client.config().environment,
+        "nino_set": bool(connection and connection.get("nino")),
+        "business_id": connection.get("business_id") if connection else None,
+        "connected_at": connection.get("connected_at") if connection else None,
+        "last_error": connection.get("last_error") if connection else None,
+        "tax_year": tax_year,
+        "quarters": hmrc_mapping.quarters(tax_year),
+        "current_quarter": hmrc_mapping.current_quarter(tax_year, today),
+        # Visible before a submission fails, not after.
+        "missing_fraud_headers": fraud.missing(headers),
+    }
+
+
+@api_router.post("/hmrc/connect")
+async def hmrc_connect(user: dict = Depends(get_current_user)):
+    require_hmrc()
+    cfg = hmrc_client.config()
+    async with pool.tenant(user["id"]) as conn:
+        state = await hmrc_repo.create_oauth_state(conn, user["id"], cfg.redirect_uri)
+    return {"authorization_url": hmrc_client.authorization_url(state), "state": state}
+
+
+@app.get("/api/hmrc/callback", include_in_schema=False)
+async def hmrc_callback(code: str = "", state: str = "", error: str = "",
+                        error_description: str = ""):
+    """HMRC redirects the browser here after the user grants access.
+
+    Not behind the bearer token — the browser has no session. The state
+    token is the credential, and it is single-use and short-lived.
+    """
+    if error:
+        return RedirectResponse(f"{APP_RETURN_URL}?status=denied&reason={quote(error_description or error)}")
+    if not code or not state:
+        return RedirectResponse(f"{APP_RETURN_URL}?status=error&reason=missing_code")
+
+    async with pool.anonymous() as conn:
+        claim = await hmrc_repo.consume_oauth_state(conn, state)
+    if claim is None:
+        return RedirectResponse(f"{APP_RETURN_URL}?status=error&reason=expired_link")
+
+    try:
+        tokens = await hmrc_client.exchange_code(code)
+    except hmrc_client.HMRCError as e:
+        logger.error(f"HMRC token exchange failed: {e.message}")
+        return RedirectResponse(f"{APP_RETURN_URL}?status=error&reason={quote(e.message)}")
+
+    async with pool.tenant(claim["user_id"]) as conn:
+        await hmrc_repo.save_tokens(conn, claim["user_id"], tokens,
+                                    hmrc_client.config().environment)
+    logger.info("HMRC connected for %s", claim["user_id"])
+    return RedirectResponse(f"{APP_RETURN_URL}?status=connected")
+
+
+@api_router.post("/hmrc/disconnect")
+async def hmrc_disconnect(user: dict = Depends(get_current_user)):
+    async with pool.tenant(user["id"]) as conn:
+        await hmrc_repo.disconnect(conn, user["id"])
+    return {"connected": False}
+
+
+@api_router.post("/hmrc/nino")
+async def hmrc_set_nino(body: NinoIn, user: dict = Depends(get_current_user)):
+    require_hmrc()
+    nino = body.nino.replace(" ", "").upper()
+    if not NINO_RE.match(nino):
+        raise HTTPException(status_code=400,
+                            detail="That doesn't look like a National Insurance number (e.g. QQ123456C).")
+    async with pool.tenant(user["id"]) as conn:
+        if await hmrc_repo.get_connection(conn, user["id"]) is None:
+            raise HTTPException(status_code=409, detail="Connect to HMRC first.")
+        await hmrc_repo.set_business(conn, user["id"], nino=nino)
+    return {"nino_set": True}
+
+
+@api_router.get("/hmrc/businesses")
+async def hmrc_businesses(request: Request, user: dict = Depends(get_current_user)):
+    require_hmrc()
+    connection = await hmrc_service.require_connection(user["id"])
+    try:
+        status_code, payload = await hmrc_service.list_businesses(
+            user_id=user["id"], connection=connection,
+            fraud_headers=device_headers(request, user))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if status_code >= 300:
+        raise _hmrc_failure(status_code, payload)
+    businesses = (payload or {}).get("listOfBusinesses", [])
+    return {"businesses": [b for b in businesses if b.get("typeOfBusiness") == "self-employment"],
+            "all": businesses}
+
+
+@api_router.post("/hmrc/business")
+async def hmrc_set_business(body: BusinessIn, user: dict = Depends(get_current_user)):
+    require_hmrc()
+    async with pool.tenant(user["id"]) as conn:
+        if await hmrc_repo.get_connection(conn, user["id"]) is None:
+            raise HTTPException(status_code=409, detail="Connect to HMRC first.")
+        await hmrc_repo.set_business(conn, user["id"], business_id=body.business_id,
+                                     business_type="self-employment")
+    return {"business_id": body.business_id}
+
+
+@api_router.get("/hmrc/obligations")
+async def hmrc_obligations(request: Request, tax_year: Optional[str] = None,
+                           user: dict = Depends(get_current_user)):
+    require_hmrc()
+    year = tax_year or hmrc_mapping.tax_year_for(date.today())
+    connection = await hmrc_service.require_connection(user["id"])
+    try:
+        status_code, payload = await hmrc_service.obligations(
+            user_id=user["id"], connection=connection,
+            fraud_headers=device_headers(request, user), tax_year=year)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if status_code >= 300:
+        raise _hmrc_failure(status_code, payload)
+    return {"tax_year": year, **(payload or {})}
+
+
+@api_router.get("/hmrc/quarter-preview")
+async def hmrc_quarter_preview(tax_year: Optional[str] = None, quarter: int = 0,
+                               user: dict = Depends(get_current_user)):
+    """What would be sent, before anything is sent.
+
+    The user is making a declaration to HMRC; they get to see the exact
+    figures first.
+    """
+    year = tax_year or hmrc_mapping.tax_year_for(date.today())
+    periods = hmrc_mapping.quarters(year)
+    if quarter:
+        chosen = next((q for q in periods if q["quarter"] == quarter), None)
+    else:
+        chosen = hmrc_mapping.current_quarter(year, date.today()) or periods[-1]
+    if chosen is None:
+        raise HTTPException(status_code=400, detail="That quarter is not part of this tax year.")
+
+    async with pool.tenant(user["id"]) as conn:
+        invoices = await repo.list_invoices(conn)
+        expenses = await repo.list_expenses(conn)
+        category_records = await repo.expense_categories(conn)
+
+    payload = hmrc_mapping.build_cumulative_payload(
+        invoices=invoices, expenses=expenses, categories=category_records,
+        period_start=date.fromisoformat(chosen["period_start"]),
+        period_end=date.fromisoformat(chosen["period_end"]))
+    return {"tax_year": year, "quarter": chosen,
+            "payload": payload, "summary": hmrc_mapping.summarise_payload(payload)}
+
+
+@api_router.post("/hmrc/submit-quarter")
+async def hmrc_submit_quarter(body: SubmitQuarterIn, request: Request,
+                              user: dict = Depends(get_current_user)):
+    require_hmrc()
+    if not body.confirm:
+        raise HTTPException(status_code=400,
+                            detail="Confirm the figures before submitting to HMRC.")
+    periods = hmrc_mapping.quarters(body.tax_year)
+    chosen = next((q for q in periods if q["quarter"] == body.quarter), None)
+    if chosen is None:
+        raise HTTPException(status_code=400, detail="That quarter is not part of this tax year.")
+
+    connection = await hmrc_service.require_connection(user["id"])
+    async with pool.tenant(user["id"]) as conn:
+        invoices = await repo.list_invoices(conn)
+        expenses = await repo.list_expenses(conn)
+        category_records = await repo.expense_categories(conn)
+    payload = hmrc_mapping.build_cumulative_payload(
+        invoices=invoices, expenses=expenses, categories=category_records,
+        period_start=date.fromisoformat(chosen["period_start"]),
+        period_end=date.fromisoformat(chosen["period_end"]))
+    try:
+        status_code, response = await hmrc_service.submit_cumulative(
+            user_id=user["id"], connection=connection,
+            fraud_headers=device_headers(request, user),
+            tax_year=body.tax_year, payload=payload)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if status_code >= 300:
+        raise _hmrc_failure(status_code, response)
+    return {"submitted": True, "tax_year": body.tax_year, "quarter": chosen,
+            "summary": hmrc_mapping.summarise_payload(payload), "response": response}
+
+
+@api_router.post("/hmrc/calculation")
+async def hmrc_trigger_calculation(request: Request, tax_year: Optional[str] = None,
+                                   user: dict = Depends(get_current_user)):
+    require_hmrc()
+    year = tax_year or hmrc_mapping.tax_year_for(date.today())
+    connection = await hmrc_service.require_connection(user["id"])
+    try:
+        status_code, payload = await hmrc_service.trigger_calculation(
+            user_id=user["id"], connection=connection,
+            fraud_headers=device_headers(request, user), tax_year=year)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if status_code >= 300:
+        raise _hmrc_failure(status_code, payload)
+    return {"tax_year": year, **(payload or {})}
+
+
+@api_router.get("/hmrc/calculation/{calculation_id}")
+async def hmrc_get_calculation(calculation_id: str, request: Request,
+                               tax_year: Optional[str] = None,
+                               user: dict = Depends(get_current_user)):
+    require_hmrc()
+    year = tax_year or hmrc_mapping.tax_year_for(date.today())
+    connection = await hmrc_service.require_connection(user["id"])
+    status_code, payload = await hmrc_service.retrieve_calculation(
+        user_id=user["id"], connection=connection,
+        fraud_headers=device_headers(request, user), tax_year=year,
+        calculation_id=calculation_id)
+    if status_code >= 300:
+        raise _hmrc_failure(status_code, payload)
+    return payload
+
+
+@api_router.get("/hmrc/submissions")
+async def hmrc_submissions(user: dict = Depends(get_current_user)):
+    async with pool.tenant(user["id"]) as conn:
+        return {"submissions": await hmrc_repo.list_submissions(conn)}
+
+
 @api_router.get("/")
 async def root():
     return {"message": "PsyBooks API"}
+
+
+@api_router.get("/health")
+async def health():
+    """Liveness + readiness probe for the hosting platform and store review."""
+    db_ok = await pool.healthy()
+    body = {
+        "status": "ok" if db_ok else "degraded",
+        "database": "up" if db_ok else "down",
+        "storage": STORAGE_BACKEND,
+        "receipt_ocr": LLM_PROVIDER or "disabled",
+        "companies_house": bool(COMPANIES_HOUSE_API_KEY),
+        "hmrc": hmrc_client.config().environment if (hmrc_client.enabled() and crypto.available()) else "disabled",
+        "time": now_iso(),
+    }
+    if not db_ok:
+        raise HTTPException(status_code=503, detail=body)
+    return body
+
+
+# ---------------------------------------------------------------------------
+# Legal pages (privacy / terms / account deletion / support)
+# Served from the API host so the store listings always have a live URL.
+# ---------------------------------------------------------------------------
+LEGAL_DIR = ROOT_DIR / "legal"
+
+
+@app.get("/legal", include_in_schema=False)
+@app.get("/legal/", include_in_schema=False)
+async def legal_index():
+    return FileResponse(LEGAL_DIR / "index.html")
+
+
+@app.get("/legal/{page}", include_in_schema=False)
+async def legal_page(page: str):
+    name = page if page.endswith((".html", ".css")) else f"{page}.html"
+    target = (LEGAL_DIR / name).resolve()
+    if LEGAL_DIR.resolve() not in target.parents or not target.is_file():
+        raise HTTPException(status_code=404, detail="Page not found")
+    return FileResponse(target)
+
+
+# HMRC/crypto failures become clear messages rather than 500s.
+@app.exception_handler(hmrc_service.NotConnected)
+async def _not_connected_handler(request: Request, exc: hmrc_service.NotConnected):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(crypto.EncryptionUnavailable)
+async def _encryption_handler(request: Request, exc: crypto.EncryptionUnavailable):
+    from fastapi.responses import JSONResponse
+    logger.error(f"Encryption unavailable: {exc}")
+    return JSONResponse(status_code=503,
+                        content={"detail": "HMRC features are unavailable. Please reconnect to HMRC."})
+
+
+@app.exception_handler(hmrc_client.HMRCError)
+async def _hmrc_error_handler(request: Request, exc: hmrc_client.HMRCError):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=502, content={"detail": exc.message})
 
 
 app.include_router(api_router)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=["*"],
+    # Credentials cannot be combined with a wildcard origin; the app uses a
+    # bearer token, not cookies, so credentials stay off unless origins are pinned.
+    allow_credentials=CORS_ORIGINS != ["*"],
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
 
-
-@app.on_event("startup")
-async def startup_storage():
-    try:
-        await run_in_threadpool(init_storage)
-        logger.info("Object storage initialised")
-    except Exception as e:
-        logger.error(f"Storage init failed (will retry on first upload): {e}")
