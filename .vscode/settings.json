@@ -1,0 +1,12 @@
+{
+  "npm.packageManager": "yarn",
+  "npm.autoDetect": "on",
+  "npm.enableRunFromFolder": true,
+  "npm.scriptExplorerAction": "run",
+  "npm.scriptExplorerExclude": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/build/**"
+  ],
+  "runNpmButtons.spinIcon": true
+}
