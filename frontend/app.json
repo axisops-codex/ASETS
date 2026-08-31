@@ -11,7 +11,9 @@
     "primaryColor": "#3E6FA8",
     "backgroundColor": "#F6F9FC",
     "description": "Invoices, expenses and a live Self Assessment estimate for self-employed practitioners — designed to stay calm and simple for ADHD brains.",
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.axisbsolutions.asets",
@@ -68,16 +70,32 @@
         "expo-image-picker",
         {
           "photosPermission": "ASETS attaches photos from your library to an expense as proof of purchase.",
-          "cameraPermission": "ASETS uses the camera so you can photograph a receipt and turn it into an expense."
+          "cameraPermission": "ASETS uses the camera so you can photograph a receipt and turn it into an expense.",
+          "microphonePermission": false
         }
       ],
       [
         "expo-local-authentication",
-        { "faceIDPermission": "ASETS uses Face ID to unlock your financial data." }
+        {
+          "faceIDPermission": "ASETS uses Face ID to unlock your financial data."
+        }
       ]
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "a09dc58f-c41d-40f8-9b32-e3652356ff0b"
+      }
+    },
+    "owner": "axis-studio-expo",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/a09dc58f-c41d-40f8-9b32-e3652356ff0b"
     }
   }
 }

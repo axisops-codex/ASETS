@@ -67,17 +67,24 @@ export function AppText({
   testID?: string;
 }) {
   const { colors, fonts, fontSize } = useTheme();
+  // No fontFamily here: the weight decides the face, and callers routinely
+  // override the weight through `style`, so the family is resolved below from
+  // whatever weight actually survives the cascade.
   const map: Record<string, TextStyle> = {
-    display: { fontSize: fontSize["4xl"], fontFamily: fonts.display, fontWeight: "700", color: colors.onSurface, letterSpacing: -0.5 },
-    title: { fontSize: fontSize["2xl"], fontFamily: fonts.text, fontWeight: "700", color: colors.onSurface },
-    heading: { fontSize: fontSize.xl, fontFamily: fonts.text, fontWeight: "600", color: colors.onSurface },
-    body: { fontSize: fontSize.lg, fontFamily: fonts.text, color: colors.onSurface },
-    label: { fontSize: fontSize.base, fontFamily: fonts.text, fontWeight: "600", color: colors.onSurfaceTertiary },
-    caption: { fontSize: fontSize.sm, fontFamily: fonts.text, color: colors.onSurfaceTertiary },
-    mono: { fontSize: fontSize["3xl"], fontFamily: fonts.display, fontWeight: "700", color: colors.onSurface, letterSpacing: -0.5 },
+    display: { fontSize: fontSize["4xl"], fontWeight: "700", color: colors.onSurface, letterSpacing: -0.5 },
+    title: { fontSize: fontSize["2xl"], fontWeight: "700", color: colors.onSurface },
+    heading: { fontSize: fontSize.xl, fontWeight: "600", color: colors.onSurface },
+    body: { fontSize: fontSize.lg, color: colors.onSurface },
+    label: { fontSize: fontSize.base, fontWeight: "600", color: colors.onSurfaceTertiary },
+    caption: { fontSize: fontSize.sm, color: colors.onSurfaceTertiary },
+    mono: { fontSize: fontSize["3xl"], fontWeight: "700", color: colors.onSurface, letterSpacing: -0.5 },
   };
+  const { fontWeight, ...rest } = StyleSheet.flatten([map[variant], color ? { color } : null, style]) as TextStyle;
+  const role = variant === "display" || variant === "mono" ? "display" : "text";
+  // fontWeight is pulled out rather than overridden: face() either hands back
+  // the face that carries that weight, or the weight itself as the fallback.
   return (
-    <Text testID={testID} numberOfLines={numberOfLines} style={[map[variant], color ? { color } : null, style]}>
+    <Text testID={testID} numberOfLines={numberOfLines} style={[rest, fonts.face(role, fontWeight)]}>
       {children}
     </Text>
   );
@@ -138,7 +145,7 @@ export function PrimaryButton({
       ) : (
         <>
           {icon && <Ionicons name={icon} size={18} color={fg} />}
-          <Text style={{ color: fg, fontWeight: "700", fontSize: 16, fontFamily: fonts.text }}>{title}</Text>
+          <Text style={{ color: fg, fontSize: 16, ...fonts.face("text", "700") }}>{title}</Text>
         </>
       )}
     </Pressable>
@@ -215,7 +222,7 @@ export function Pill({ label, tone = "neutral", testID }: { label: string; tone?
       testID={testID}
       style={{ backgroundColor: t.bg, borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: 4 }}
     >
-      <Text style={{ color: t.fg, fontSize: 12, fontWeight: "700", fontFamily: fonts.text }}>{label}</Text>
+      <Text style={{ color: t.fg, fontSize: 12, ...fonts.face("text", "700") }}>{label}</Text>
     </View>
   );
 }

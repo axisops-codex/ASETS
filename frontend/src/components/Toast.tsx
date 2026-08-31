@@ -49,7 +49,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       >
         <View style={[styles.toast, { backgroundColor: toneColor, borderRadius: radius.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.md }]}>
           <Ionicons name={icon as any} size={20} color={tone === "info" ? colors.onSurfaceInverse : "#fff"} />
-          <Text style={{ color: tone === "info" ? colors.onSurfaceInverse : "#fff", fontFamily: fonts.text, fontWeight: "600", flexShrink: 1 }}>
+          <Text style={{ color: tone === "info" ? colors.onSurfaceInverse : "#fff", flexShrink: 1, ...fonts.face("text", "600") }}>
             {msg}
           </Text>
         </View>
